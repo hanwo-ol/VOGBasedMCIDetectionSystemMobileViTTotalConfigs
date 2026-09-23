@@ -9,11 +9,12 @@ __pycache__/
 *.pyc
 
 # --- Large / regenerable artifacts (NOT for git) ---
-data/                        # raw VOG CSVs (371 MB)
-outputs/cache/               # CWT pickles (~1 GB, rebuilt from data)
-outputs/checkpoints/         # model weights (~7 GB)
-outputs/logs/                # verbose per-run training logs
-imgs/cwt_scalograms/         # generated scalogram PNGs (~115 MB)
+data/
+*.zip
+outputs/cache/
+outputs/checkpoints/
+outputs/logs/
+imgs/cwt_scalograms/
 
 # Tracked deliverables (kept in git):
 #   src/**  · key_results/**  · outputs/reports/{RESULTS.md, analysis_*.md, confusion_matrices/, _build_report.py}
