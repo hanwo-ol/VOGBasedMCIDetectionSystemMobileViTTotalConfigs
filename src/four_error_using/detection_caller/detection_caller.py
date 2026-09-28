@@ -138,6 +138,29 @@ def _parse_args() -> argparse.Namespace:
              "mobilevitv2-2.0 when several runs share one GPU, to avoid eval-time OOM.",
     )
     parser.add_argument(
+        "--vote-mode",
+        dest="vote_mode",
+        choices=[
+            "manual",
+            "auto_auroc",
+            "auto_stacking",
+            "auto_true_stacking",
+            "auto_nnls",
+            "auto_diff_sparsemax",
+            "auto_diff_softmax",
+            "auto_attention_mil",
+        ],
+        default="manual",
+        help="Voting weight determination mode: 'manual' (default, uses --vote-weights or "
+             "--weighted-vote), 'auto_auroc' (fold train-split task AUROC softmax mapping), "
+             "'auto_stacking' (fold train-split L2 logistic softmax mapping), "
+             "'auto_true_stacking' (direct logistic regression meta-learner with intercept and unconstrained weights), "
+             "'auto_nnls' (non-negative least squares with exact zero weights for harmful tasks), "
+             "'auto_diff_sparsemax' (Alternative A: learnable task weighter with sparsemax & joint subject loss), "
+             "'auto_diff_softmax' (Alternative A: learnable task weighter with softmax & joint subject loss), "
+             "or 'auto_attention_mil' (Alternative B: hierarchical gated attention multiple instance learning).",
+    )
+    parser.add_argument(
         "--weighted-vote",
         dest="weighted_vote",
         action="store_true",
@@ -227,6 +250,37 @@ def _parse_args() -> argparse.Namespace:
         help="Number of CV folds/repetitions (default 30).",
     )
     parser.add_argument(
+        "--no-cwt-baseline",
+        dest="no_cwt_baseline",
+        action="store_true",
+        default=False,
+        help="Bypass pre-stimulus mean subtraction for CWT inputs across all tasks. "
+             "Artifact rejection still uses baseline-corrected signals for exact cohort parity.",
+    )
+    parser.add_argument(
+        "--cwt-baseline-mode",
+        dest="cwt_baseline_mode",
+        choices=["subtraction", "bypass", "hybrid"],
+        default="subtraction",
+        help="CWT baseline subtraction mode: 'subtraction' (default, DC drift removed for all tasks), "
+             "'bypass' (raw trajectory preserved for all tasks), or 'hybrid' (baseline subtraction for "
+             "Task 0, 1 only; bypassed for Task 2-7 to preserve dynamic rhythm).",
+    )
+    parser.add_argument(
+        "--hybrid-cwt-baseline",
+        dest="hybrid_cwt_baseline",
+        action="store_true",
+        default=False,
+        help="Shortcut for --cwt-baseline-mode hybrid (Task 0, 1 baseline subtraction, Task 2-7 bypass).",
+    )
+    parser.add_argument(
+        "--max-epochs",
+        dest="max_epochs",
+        type=int,
+        default=500,
+        help="Maximum training epochs per fold (default 500).",
+    )
+    parser.add_argument(
         "--fuse-kinematic",
         dest="fuse_kinematic",
         action="store_true",
@@ -309,6 +363,13 @@ def main():
         task_weights = None
         custom_weights = False
 
+    if args.hybrid_cwt_baseline or args.cwt_baseline_mode == "hybrid":
+        cwt_baseline_mode = "hybrid"
+    elif args.no_cwt_baseline or args.cwt_baseline_mode == "bypass":
+        cwt_baseline_mode = "bypass"
+    else:
+        cwt_baseline_mode = "subtraction"
+
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_full"
     if args.augment:
         run_id += "_aug"
@@ -321,7 +382,21 @@ def main():
         run_id += f"_pat{int(args.patience):03d}"
     if int(args.batch_size) != _DEFAULT_BATCH_SIZE:
         run_id += f"_bs{int(args.batch_size):03d}"
-    if task_weights is not None:
+    if args.vote_mode == "auto_auroc":
+        run_id += "_vauroc"
+    elif args.vote_mode == "auto_stacking":
+        run_id += "_vstack"
+    elif args.vote_mode == "auto_true_stacking":
+        run_id += "_vtruestack"
+    elif args.vote_mode == "auto_nnls":
+        run_id += "_vnnls"
+    elif args.vote_mode == "auto_diff_sparsemax":
+        run_id += "_vdiffsparse"
+    elif args.vote_mode == "auto_diff_softmax":
+        run_id += "_vdiffsoft"
+    elif args.vote_mode == "auto_attention_mil":
+        run_id += "_vattnmil"
+    elif task_weights is not None:
         thr_label = "allTrials" if args.no_artifact_reject else f"artifact{int(round(artifact_threshold))}"
         run_id += f"_wvote_{thr_label}"
         # Custom schemes additionally carry a compact weight encoding so multiple
@@ -334,6 +409,10 @@ def main():
         run_id += "_4err"
     elif args.signal_mode == "full_error":
         run_id += "_8err"
+    if cwt_baseline_mode == "bypass":
+        run_id += "_nocwtbl"
+    elif cwt_baseline_mode == "hybrid":
+        run_id += "_hybridbl"
     if args.region == "leftover":
         run_id += "_leftover"
     if args.region == "all":
@@ -359,13 +438,20 @@ def main():
     log_path = LOGS_DIR / f"run_{run_id}.log"
     _setup_logging(log_path, mode_tag=mode_tag)
     log = logging.getLogger(__name__)
+    if args.vote_mode != "manual" and (args.vote_weights is not None or args.weighted_vote):
+        log.warning(
+            "vote_mode is '%s'; fold-dynamic learned weights will override manual task_weights.",
+            args.vote_mode,
+        )
     log.info(
-        "Run ID: %s | augment=%s | dropout=%.2f | patience=%d | batch_size=%d | artifact=%s | signal_mode=%s (%dch) | stratified=%s | weighted_vote=%s",
+        "Run ID: %s | augment=%s | dropout=%.2f | patience=%d | batch_size=%d | artifact=%s | signal_mode=%s (%dch) | stratified=%s | vote_mode=%s | weighted_vote=%s | cwt_baseline=%s",
         run_id, args.augment, args.dropout, args.patience, args.batch_size,
         ("OFF (all trials)" if args.no_artifact_reject else f"thr={artifact_threshold:.1f}"),
         args.signal_mode, in_channels,
         (STRATIFIED_TEST_COUNTS if args.stratified else False),
+        args.vote_mode,
         (task_weights if task_weights is not None else "off"),
+        cwt_baseline_mode,
     )
     log.info("Log file: %s", log_path)
 
@@ -383,6 +469,10 @@ def main():
         cache_name = cache_name.replace(".pkl", {"deviation":"_ent.pkl","position":"_entpos.pkl","kl":"_entkl.pkl"}[args.entropy_signal])
     if args.kinematics_in_model:
         cache_name = cache_name.replace(".pkl", "_kinmodel.pkl")
+    if cwt_baseline_mode == "bypass":
+        cache_name = cache_name.replace(".pkl", "_nocwtbl.pkl")
+    elif cwt_baseline_mode == "hybrid":
+        cache_name = cache_name.replace(".pkl", "_hybrid.pkl")
 
     pipeline = EventLockedCWTPipeline(
         pre_stimulus_sec=0.2,
@@ -398,6 +488,8 @@ def main():
         add_entropy=args.entropy,
         entropy_signal=args.entropy_signal,
         add_kinematics=args.kinematics_in_model,
+        cwt_baseline_subtraction=(cwt_baseline_mode == "subtraction"),
+        cwt_baseline_mode=cwt_baseline_mode,
         # Separate cache per signal mode (and per rejection setting / region) so
         # tensors of different shape / trial-set never collide.
         cache_path=CACHE_DIR / cache_name,
@@ -442,7 +534,7 @@ def main():
 
     mc = RepetitiveGroupValidator(
         dataset,
-        max_epochs=500,
+        max_epochs=args.max_epochs,
         batch_size=args.batch_size,
         eval_batch_size=args.eval_batch_size,
         n_splits=args.n_splits,
@@ -453,6 +545,7 @@ def main():
         early_stop_patience=args.patience,
         dropout=args.dropout,
         task_weights=task_weights,
+        vote_mode=args.vote_mode,
         in_channels=in_channels,
         stratified=args.stratified,
         strat_test_counts=STRATIFIED_TEST_COUNTS if args.stratified else None,

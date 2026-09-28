@@ -9,10 +9,16 @@ from four_error_using.models.layers.cosine_linear import CosineLinear
 from four_error_using.models.layers.conv_adapter import ConvAdapter
 from four_error_using.models.layers.frozen_mobilevit_backbone import FrozenMobileViTBackbone
 from four_error_using.models.layers.task_embedding import TaskEmbedding
+from four_error_using.models.layers.task_weighter import DifferentiableTaskWeighter, sparsemax
+from four_error_using.models.layers.mil_pooler import GatedAttentionMILPooler, pool_window_features
 
 __all__ = [
     "CosineLinear",
     "ConvAdapter",
     "FrozenMobileViTBackbone",
     "TaskEmbedding",
+    "DifferentiableTaskWeighter",
+    "sparsemax",
+    "GatedAttentionMILPooler",
+    "pool_window_features",
 ]

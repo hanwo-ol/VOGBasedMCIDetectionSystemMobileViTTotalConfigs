@@ -43,11 +43,15 @@ class TransferMobileViTClassifier(nn.Module):
                          out_features=num_classes, scale=10.0),
         )
 
-    def forward(self, x: torch.Tensor, task_id: torch.Tensor) -> torch.Tensor:
-        """scalogram + task id -> HC/MCI logits (adapter → frozen backbone → head)."""
+    @property
+    def feature_dim(self) -> int:
+        """Total fused representation dimension (backbone feature_dim + task_emb_dim + entropy_dim)."""
+        return self.backbone.feature_dim + self.task_embedding.embedding_dim + self.entropy_dim
+
+    def extract_features(self, x: torch.Tensor, task_id: torch.Tensor) -> torch.Tensor:
+        """Extract fused representation [B, feature_dim] prior to the classifier head."""
         extra = None
         if self.entropy_dim > 0:
-            # extra planes ride after the CWT channels; recover the scalar(s)
             extra = x[:, self.in_channels:self.in_channels + self.entropy_dim].mean(dim=(2, 3))
             extra = self.entropy_norm(extra)
             x = x[:, :self.in_channels]
@@ -58,5 +62,9 @@ class TransferMobileViTClassifier(nn.Module):
         parts = [features, task_emb]
         if extra is not None:
             parts.append(extra)                          # entropy joins here (post-backbone)
-        fused = torch.cat(parts, dim=1)                  # [B, 672 (+entropy_dim)]
+        return torch.cat(parts, dim=1)                   # [B, 672 (+entropy_dim)]
+
+    def forward(self, x: torch.Tensor, task_id: torch.Tensor) -> torch.Tensor:
+        """scalogram + task id -> HC/MCI logits (adapter → frozen backbone → head)."""
+        fused = self.extract_features(x, task_id)
         return self.classifier(fused)                    # metric projection -> logits

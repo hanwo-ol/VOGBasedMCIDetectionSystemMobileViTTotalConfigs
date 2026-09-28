@@ -6,8 +6,10 @@ cache mechanism (separate file from the 2-experiment cache so neither
 overwrites the other) and an AugmentedSubset for train-only SpecAugment.
 """
 
+import dis
 import logging
 import pickle
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Optional, Union
@@ -51,7 +53,20 @@ class EventLockedCWTPipeline:
         add_entropy: bool = False,
         entropy_signal: str = "deviation",
         add_kinematics: bool = False,
+        cwt_baseline_subtraction: bool = True,
+        cwt_baseline_mode: str = "subtraction",
     ):
+        if cwt_baseline_mode not in ("subtraction", "bypass", "hybrid"):
+            raise ValueError(
+                f"cwt_baseline_mode must be 'subtraction', 'bypass', or 'hybrid', got {cwt_baseline_mode!r}"
+            )
+        # Backward compatibility: if cwt_baseline_subtraction=False is passed and cwt_baseline_mode is subtraction,
+        # interpret as bypass.
+        if not cwt_baseline_subtraction and cwt_baseline_mode == "subtraction":
+            cwt_baseline_mode = "bypass"
+
+        self.cwt_baseline_mode = cwt_baseline_mode
+        self.cwt_baseline_subtraction = (cwt_baseline_mode == "subtraction")
         # add_entropy: append one extra channel = Shannon entropy of the trial.
         # entropy_signal: "deviation" = entropy of (actual eye − target) outline;
         #                 "position"  = entropy of the actual eye-position outline.
@@ -113,6 +128,22 @@ class EventLockedCWTPipeline:
         self.data_store = defaultdict(lambda: defaultdict(list))
         self.cache_path = Path(cache_path) if cache_path is not None else None
 
+    def _should_subtract_baseline(self, task_id: int) -> bool:
+        """Determines whether baseline subtraction should be applied for task_id.
+
+        - 'subtraction': all tasks subtract baseline.
+        - 'bypass': all tasks bypass baseline subtraction.
+        - 'hybrid': only discrete step/gap tasks (Task 0, 1) subtract baseline,
+                    while other tasks (2..7: anti, repetitive, vertical) bypass it
+                    to preserve dynamic rhythm and avoid distorting trajectories.
+        """
+        if self.cwt_baseline_mode == "bypass":
+            return False
+        elif self.cwt_baseline_mode == "hybrid":
+            return task_id in (0, 1)
+        else:
+            return True
+
     def _config_signature(self) -> dict:
         """Settings fingerprint — the cache is only reused if this matches."""
         return {
@@ -133,6 +164,8 @@ class EventLockedCWTPipeline:
             # kinematic feature math version — so the kinmodel tensor cache rebuilds
             # whenever the saccade metrics change.
             "kin_version": KIN_FEATURE_VERSION if self.add_kinematics else None,
+            "cwt_baseline_subtraction": self.cwt_baseline_subtraction,
+            "cwt_baseline_mode": self.cwt_baseline_mode,
             "schema_version": {"four_error": 2, "full_error": 3}.get(self.signal_mode, 1),
         }
 
@@ -261,17 +294,20 @@ class EventLockedCWTPipeline:
             if s < 0 or e > len(df):
                 continue
 
-            err_L = target_val[s:e] - l_val[s:e]
-            err_R = target_val[s:e] - r_val[s:e]
-            err_L -= np.mean(err_L[:samples_pre])
-            err_R -= np.mean(err_R[:samples_pre])
+            err_L = (target_val[s:e] - l_val[s:e]).astype(np.float64)
+            err_R = (target_val[s:e] - r_val[s:e]).astype(np.float64)
+            bl_L = err_L - np.mean(err_L[:samples_pre])
+            bl_R = err_R - np.mean(err_R[:samples_pre])
 
-            if (np.max(np.abs(err_L)) > self.artifact_threshold
-                    or np.max(np.abs(err_R)) > self.artifact_threshold):
+            if (np.max(np.abs(bl_L)) > self.artifact_threshold
+                    or np.max(np.abs(bl_R)) > self.artifact_threshold):
                 continue
 
-            re_L, im_L = self._get_cwt_tensor(err_L, fs)
-            re_R, im_R = self._get_cwt_tensor(err_R, fs)
+            sub_bl = self._should_subtract_baseline(task_id)
+            cwt_L = bl_L if sub_bl else err_L
+            cwt_R = bl_R if sub_bl else err_R
+            re_L, im_L = self._get_cwt_tensor(cwt_L, fs)
+            re_R, im_R = self._get_cwt_tensor(cwt_R, fs)
 
             mag_L = self._sparsify_and_compress(re_L, im_L)
             mag_R = self._sparsify_and_compress(re_R, im_R)
@@ -318,17 +354,20 @@ class EventLockedCWTPipeline:
             if s < 0 or e > len(df):
                 continue
 
-            err_L = target_val[s:e] - l_val[s:e]
-            err_R = target_val[s:e] - r_val[s:e]
-            err_L -= np.mean(err_L[:samples_pre])
-            err_R -= np.mean(err_R[:samples_pre])
+            err_L = (target_val[s:e] - l_val[s:e]).astype(np.float64)
+            err_R = (target_val[s:e] - r_val[s:e]).astype(np.float64)
+            bl_L = err_L - np.mean(err_L[:samples_pre])
+            bl_R = err_R - np.mean(err_R[:samples_pre])
 
-            if (np.max(np.abs(err_L)) > self.artifact_threshold
-                    or np.max(np.abs(err_R)) > self.artifact_threshold):
+            if (np.max(np.abs(bl_L)) > self.artifact_threshold
+                    or np.max(np.abs(bl_R)) > self.artifact_threshold):
                 continue
 
-            re_L, im_L = self._get_cwt_tensor(err_L, fs)
-            re_R, im_R = self._get_cwt_tensor(err_R, fs)
+            sub_bl = self._should_subtract_baseline(task_id)
+            cwt_L = bl_L if sub_bl else err_L
+            cwt_R = bl_R if sub_bl else err_R
+            re_L, im_L = self._get_cwt_tensor(cwt_L, fs)
+            re_R, im_R = self._get_cwt_tensor(cwt_R, fs)
 
             # RAW magnitudes — no sparsify, no z-score
             mag_L_raw = np.sqrt(re_L ** 2 + im_L ** 2)
@@ -413,24 +452,31 @@ class EventLockedCWTPipeline:
             err_LV = (lv[s:e] - tv[s:e]).astype(np.float64)
             err_RV = (rv[s:e] - tv[s:e]).astype(np.float64)
 
-            for arr in (err_LH, err_RH, err_LV, err_RV):
-                arr -= np.mean(arr[:samples_pre])
+            # Baseline-subtracted errors for artifact rejection (cohort parity)
+            bl_LH = err_LH - np.mean(err_LH[:samples_pre])
+            bl_RH = err_RH - np.mean(err_RH[:samples_pre])
+            bl_LV = err_LV - np.mean(err_LV[:samples_pre])
+            bl_RV = err_RV - np.mean(err_RV[:samples_pre])
 
             # Artifact rejection on the task-axis L/R errors only (parity rule)
             if axis_char == 'h':
-                task_l_err, task_r_err = err_LH, err_RH
+                task_l_err, task_r_err = bl_LH, bl_RH
             else:
-                task_l_err, task_r_err = err_LV, err_RV
+                task_l_err, task_r_err = bl_LV, bl_RV
             if (np.max(np.abs(task_l_err)) > self.artifact_threshold
                     or np.max(np.abs(task_r_err)) > self.artifact_threshold):
                 continue
+
+            # CWT input signals: toggle baseline subtraction based on flag / mode
+            sub_bl = self._should_subtract_baseline(task_id)
+            cwt_signals = (bl_LH, bl_RH, bl_LV, bl_RV) if sub_bl else (err_LH, err_RH, err_LV, err_RV)
 
             # Compute raw |CWT| magnitudes ONCE, so the cross-axis ratio is
             # measured BEFORE per-channel z-scoring (which erases cross-channel
             # magnitude comparisons).
             raw_mags = []
             channels = []
-            for err in (err_LH, err_RH, err_LV, err_RV):
+            for err in cwt_signals:
                 re_c, im_c = self._get_cwt_tensor(err, fs)
                 raw_mag = np.sqrt(re_c ** 2 + im_c ** 2)
                 raw_mags.append(raw_mag)
@@ -585,20 +631,26 @@ class EventLockedCWTPipeline:
             err_RH = (rh[s:e] - th[s:e]).astype(np.float64)
             err_LV = (lv[s:e] - tv[s:e]).astype(np.float64)
             err_RV = (rv[s:e] - tv[s:e]).astype(np.float64)
-            for arr in (err_LH, err_RH, err_LV, err_RV):
-                arr -= np.mean(arr[:samples_pre])
+
+            bl_LH = err_LH - np.mean(err_LH[:samples_pre])
+            bl_RH = err_RH - np.mean(err_RH[:samples_pre])
+            bl_LV = err_LV - np.mean(err_LV[:samples_pre])
+            bl_RV = err_RV - np.mean(err_RV[:samples_pre])
 
             if axis_char == 'h':
-                task_l_err, task_r_err = err_LH, err_RH
+                task_l_err, task_r_err = bl_LH, bl_RH
             else:
-                task_l_err, task_r_err = err_LV, err_RV
+                task_l_err, task_r_err = bl_LV, bl_RV
             if (np.max(np.abs(task_l_err)) > self.artifact_threshold
                     or np.max(np.abs(task_r_err)) > self.artifact_threshold):
                 continue
 
+            sub_bl = self._should_subtract_baseline(task_id)
+            cwt_signals = (bl_LH, bl_RH, bl_LV, bl_RV) if sub_bl else (err_LH, err_RH, err_LV, err_RV)
+
             raw_mags = []
             channels = []
-            for err in (err_LH, err_RH, err_LV, err_RV):
+            for err in cwt_signals:
                 re_c, im_c = self._get_cwt_tensor(err, fs)
                 raw_mag = np.sqrt(re_c ** 2 + im_c ** 2)
                 raw_mags.append(raw_mag)
@@ -666,17 +718,25 @@ class EventLockedCWTPipeline:
             err_RH = (rh[s:e] - th[s:e]).astype(np.float64)
             err_LV = (lv[s:e] - tv[s:e]).astype(np.float64)
             err_RV = (rv[s:e] - tv[s:e]).astype(np.float64)
-            for arr in (err_LH, err_RH, err_LV, err_RV):
-                arr -= np.mean(arr[:samples_pre])
+
+            bl_LH = err_LH - np.mean(err_LH[:samples_pre])
+            bl_RH = err_RH - np.mean(err_RH[:samples_pre])
+            bl_LV = err_LV - np.mean(err_LV[:samples_pre])
+            bl_RV = err_RV - np.mean(err_RV[:samples_pre])
+
             if axis_char == 'h':
-                task_l_err, task_r_err = err_LH, err_RH
+                task_l_err, task_r_err = bl_LH, bl_RH
             else:
-                task_l_err, task_r_err = err_LV, err_RV
+                task_l_err, task_r_err = bl_LV, bl_RV
             if (np.max(np.abs(task_l_err)) > self.artifact_threshold
                     or np.max(np.abs(task_r_err)) > self.artifact_threshold):
                 continue
+
+            sub_bl = self._should_subtract_baseline(task_id)
+            cwt_signals = (bl_LH, bl_RH, bl_LV, bl_RV) if sub_bl else (err_LH, err_RH, err_LV, err_RV)
+
             raw_mags = []; channels = []
-            for err in (err_LH, err_RH, err_LV, err_RV):
+            for err in cwt_signals:
                 re_c, im_c = self._get_cwt_tensor(err, fs)
                 raw_mags.append(np.sqrt(re_c ** 2 + im_c ** 2))
                 mag_c = self._sparsify_and_compress(re_c, im_c)
@@ -782,9 +842,86 @@ class EventLockedCWTPipeline:
         self._save_cache()
 
 
+def _inspect_unpack_count() -> Optional[int]:
+    """Inspect caller bytecode to detect if an UNPACK_SEQUENCE opcode expects 3 or 4 items."""
+    try:
+        frame = sys._getframe(2)
+        code = frame.f_code
+        instructions = list(dis.get_instructions(code))
+        target_idx = None
+        for i, instr in enumerate(instructions):
+            if instr.offset <= frame.f_lasti:
+                target_idx = i
+            else:
+                break
+        if target_idx is not None:
+            for j in range(target_idx, min(target_idx + 8, len(instructions))):
+                op = instructions[j].opname
+                if op in ("CACHE", "EXTENDED_ARG", "NOP", "RESUME", "PRECALL"):
+                    continue
+                if op in ("UNPACK_SEQUENCE", "UNPACK_EX"):
+                    argval = instructions[j].argval
+                    if isinstance(argval, tuple):
+                        return int(argval[0])
+                    return int(argval)
+                if j > target_idx:
+                    break
+    except Exception:
+        pass
+    return None
+
+
+class DatasetItem(tuple):
+    """Dataset sample tuple (X, T, y, sid).
+
+    Preserves 100% backward compatibility:
+    - If unpacked into 3 variables (x, t, y = item), yields (X, T, y).
+    - If unpacked into 4 variables (x, t, y, sid = item), yields (X, T, y, sid).
+    - Indexing: item[0]->X, item[1]->T, item[2]->y, item[3]->sid.
+    - Slicing: item[:3]->(X, T, y).
+    - Properties: item.X, item.T, item.y, item.sid.
+    - Pickling/unpickling safe across multiprocessing workers.
+    """
+
+    def __new__(cls, *args):
+        if len(args) == 1 and isinstance(args[0], (tuple, list)):
+            return super().__new__(cls, args[0])
+        elif len(args) == 4:
+            return super().__new__(cls, args)
+        else:
+            raise TypeError(
+                f"DatasetItem expects 4 arguments (x, t, y, sid) or an iterable of 4 items, got {len(args)}"
+            )
+
+    def __reduce__(self):
+        return (DatasetItem, (self[0], self[1], self[2], self[3]))
+
+    @property
+    def X(self):
+        return self[0]
+
+    @property
+    def T(self):
+        return self[1]
+
+    @property
+    def y(self):
+        return self[2]
+
+    @property
+    def sid(self):
+        return self[3]
+
+    def __iter__(self):
+        cnt = _inspect_unpack_count()
+        if cnt == 3:
+            return iter((self[0], self[1], self[2]))
+        return super().__iter__()
+
+
 class TaskConditionedDataset(Dataset):
     """PyTorch dataset: flattens the {group: {subject: [windows]}} store into
-    (scalogram, task_id, HC/MCI label) samples, remembering each window's subject."""
+    (scalogram, task_id, HC/MCI label, subject_id) samples, remembering each window's subject."""
 
     def __init__(self, data_store):
         self.X = []
@@ -809,7 +946,7 @@ class TaskConditionedDataset(Dataset):
         return len(self.y)
 
     def __getitem__(self, idx):
-        return self.X[idx], self.T[idx], self.y[idx]
+        return DatasetItem(self.X[idx], self.T[idx], self.y[idx], self.subject_ids[idx])
 
 
 class AugmentedSubset(Subset):
@@ -854,11 +991,18 @@ class AugmentedSubset(Subset):
         return x
 
     def __getitem__(self, idx):
-        x, task_id, label = super().__getitem__(idx)
+        sample = super().__getitem__(idx)
+        if len(sample) == 4:
+            x, task_id, label, sid = sample
+        else:
+            x, task_id, label = sample
+            sid = None
         if torch.rand(1).item() < self.freq_mask_p:
             x = self._freq_mask(x)
         if torch.rand(1).item() < self.time_mask_p:
             x = self._time_mask(x)
+        if sid is not None:
+            return DatasetItem(x, task_id, label, sid)
         return x, task_id, label
 
     def __getitems__(self, indices):

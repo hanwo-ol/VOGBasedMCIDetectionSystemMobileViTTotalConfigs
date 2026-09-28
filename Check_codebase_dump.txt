@@ -1,0 +1,478 @@
+
+==================================================
+Sheet: 매직 넘버
+==================================================
+Row  1: 매직 넘버 체크 | 항목 | 하드코딩 수치 | 코드 위치 | 기술적 영향
+Row  2: ? | 코호트 배제 | _EXCLUDED_DIR_NAMES = {"New_data"} | data_engineer.py:L33 | data/New_data 디렉토리 파일이 로딩에서 무조건 제외됨. 37명 외 신규 데이터 차단.
+Row  3: 이해 가능 | 층화 테스트 피험자 수 | STRATIFIED_TEST_COUNTS = {0: 4, 1: 8} | detection_caller.py:L65 | 테스트 세트에 HC 4명, MCI 8명을 강제 배정.
+Row  4: ? | 이진 결정 임계값 | threshold = 0.5 (pred = prob > 0.5) | repetitive_validator.py:L309 | 클래스 불균형(HC 14명 vs MCI 23명) 상황에서 사전 확률(Prior 0.62) 보정 없이 0.5로 고정.
+Row  5: ? | 단일 축 이상치 검사 | task_l_err > thr or task_r_err > thr | data_engineer.py:L424-L426 | four_error 모드에서 4채널(H/V)을 모두 입력으로 쓰면서, 이상치 제거는 주 태스크 축(H 또는 V) 오차만 검사하고 비주축(Cross-axis) 오차의 발산은 필터링하지 않음.
+Row  6: 이해 가능 | 아티팩트 기각 임계값 | artifact_threshold = 30.0 (기본값 45.0) | data_engineer.py:L46,  detection_caller.py:L52 | 안구 오차 30도 초과 시 기각.
+Row  7: 이해 가능/근거 제시 필요 | 시간 분할 윈도우 | pre_sec = 0.2, post_sec = 0.8 | data_engineer.py:L39-L40 | 자극 전 0.2초 평균을 베이스라인 오프셋으로 간주하고 전체 윈도우에서 차감.
+Row  8: ? | 주파수 대역 한계 | min_freq = 15.0, max_freq = 60.0 | data_engineer.py:L41-L42 | 15Hz 미만 저주파수를 하드 하이패스 차단. 60Hz는 120Hz 샘플링의 나이퀴스트 한계.
+Row  9: 이해 가능 | 시간-주파수 해상도 | freq_bins = 32, target_time_bins = 32 | data_engineer.py:L43-L44 | MobileViT 입력 크기($256 \times 256$)와의 8배 정수 배율을 맞추기 위한 크기 지정.
+Row 10: ? | Morlet 웨이블릿 형태 | cmor4.0-1.0 (w_morlet = 4.0) | data_engineer.py:L45, L98 | 모체 웨이블릿 중심 대역폭 4.0 고정.
+Row 11: ? | 희소화(Sparsification) | percentile(magnitude, 85) | data_engineer.py:L183-L185 | 스칼로그램 진폭 하위 85%를 강제로 1e-3으로 치환. 상위 15% 에너지만 보존.
+Row 12: 4 채널인데, 환자별로 각 채널별로 정규화 | Z-Score 정규화 | (mag_db - mean) / (std + 1e-8) | data_engineer.py:L187 | 단일 윈도우 내부에서 정규화하여 윈도우 간 에너지 절대값 차이를 소거함.
+Row 13: ? | 공간 보간법 | zoom(..., order=0), interpolate(..., mode='nearest') | data_engineer.py:L176,  frozen_mobilevit_backbone.py:L43 | 32에서 256으로 최근접 이웃(Nearest-neighbor) 8배 확대하여 고주파 계단식 격자 아티팩트 유발.
+Row 14: 어떻게든 찾아 내지 않았을까 | CosineLinear Scale ($\tau$) | scale = 10.0 | cosine_linear.py:L13,  task_conditioned_classifier.py:L43 | 정규화된 코사인 유사도 벡터의 스케일 팩터. 소프트맥스 엔트로피를 결정하며 고정됨.
+Row 15: ? | ConvAdapter 커널 | kernel_size = (5, 1), padding = (2, 0) | conv_adapter.py:L14 | 시간 축 폭 1, 주파수 축 폭 5의 비대칭 필터.
+Row 16:  | Task Embedding 차원 | task_emb_dim = 32 | task_conditioned_classifier.py:L28 | 8개 태스크를 나타내는 32차원 임베딩 벡터. 백본 특징(640차원)과 단순 결합.
+Row 17: 이해 가능 | 드롭아웃 확률 | dropout = 0.3 (또는 0.5) | task_conditioned_classifier.py:L29,  detection_caller.py:L49 | 분류기 헤드 직전 드롭아웃.
+Row 18: 이해 가능 | 학습률 및 가중치 감쇠 | lr = 1e-3, weight_decay = 1e-4 | model_trainer.py:L79 | AdamW 최적화 파라미터.
+Row 19: 이해 가능 | 워밍업 및 클리핑 | WARMUP_EPOCHS = 5, GRAD_CLIP = 1.0 | model_trainer.py:L54-L55 | 초기 5 에포크 선형 웜업 및 L2 노름 1.0 초과 시 그래디언트 클리핑.
+Row 20: 이해 가능 | 스케줄러 팩터 | factor = 0.2, patience = 10 | model_trainer.py:L133 | 10 에포크 정체 시 LR을 5분의 1로 감쇠.
+
+==================================================
+Sheet: 웨이블릿
+==================================================
+Row  1: Morlet 웨이블릿(Complex Morlet Wavelet, `cmor4.0-1.0`) 차용의 수학적·신호처리적 타당성과 근거, 그리고 코드베이스 내 구현상의 한계점은 다음과 같습니다.
+Row  2: ### 1. Morlet 웨이블릿의 수학적 정의
+Row  3: 코드베이스([data_engineer.py:L98](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L98))에서 호출하는 `cmor4.0-1.0`은 복소 모를레(Complex Morlet) 웨이블릿입니다:
+Row  4: $$\psi(t) = \frac{1}{\sqrt{\pi f_b}} e^{2\pi i f_c t} e^{-\frac{t^2}{f_b}}$$
+Row  5: - **$f_b$ (Bandwidth parameter)**: `4.0` (가우시안 윈도우의 감쇠 속도 및 대역폭 결정)
+Row  6: - **$f_c$ (Center frequency)**: `1.0 Hz` (중심 진동 주파수)
+Row  7: 푸리에 변환 영역에서의 표현은 다음과 같습니다:
+Row  8: $$\hat{\psi}(\omega) = e^{-\pi^2 f_b \left(f - f_c\right)^2}$$
+Row  9: ### 2. 차용의 신호처리적 타당성 (이유)
+Row 10: #### (1) 하이젠베르크 불확정성 한계 최소화 (Optimal Time-Frequency Localization)
+Row 11: - 신호 처리 이론상 시간 폭($\sigma_t$)과 주파수 폭($\sigma_\omega$)의 곱은 다음 불확정성 원리를 만족해야 합니다:
+Row 12: $$\sigma_t \sigma_\omega \ge \frac{1}{2}$$
+Row 13: - Morlet 웨이블릿은 가우시안(Gaussian) 포락선에 복소 정현파(Complex sinusoid)를 곱한 구조(Gabor 웨이블릿의 일종)이므로, 등호($\sigma_t \sigma_\omega = \frac{1}{2}$)를 만족하는 최소 불확정성 기저 함수(Heisenberg-Gabor Limit)입니다.
+Row 14: - 단속적이고 비정상적(Non-stationary)인 안구 위치 오차 신호에서 시간적 발생 시점과 주파수 성분을 왜곡 없이 동시 국소화하는 데 사용됩니다.
+Row 15: #### (2) 복소수(Complex) 형태를 통한 순수 순시 진폭(Magnitude) 추출
+Row 16: - 실수 웨이블릿(예: Ricker/Mexican hat, Daubechies, Haar)을 연속 웨이블릿 변환(CWT)에 적용하면 기저 함수의 진동에 의해 계수에 제로 크로싱(Zero-crossing) 간섭 및 음수 값이 발생합니다.
+Row 17: - 복소 모를레 웨이블릿은 실수부($\text{Re}$)와 허수부($\text{Im}$)가 힐베르트 변환 관계($90^\circ$ 위상차)를 이루므로, 진동에 독립적인 순시 포락선(Instantaneous Envelope)을 다음과 같이 스무딩 없이 직접 산출합니다:
+Row 18: $$M(t, f) = \sqrt{\text{Re}(\mathcal{W}[x](t, f))^2 + \text{Im}(\mathcal{W}[x](t, f))^2}$$
+Row 19: - 코드베이스([data_engineer.py:L182, L435](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L182,L435))가 2D 흑백 이미지(스칼로그램)로 변환할 때 실수/허수 간섭 패턴 없이 에너지 크기 분포만을 맵으로 구성할 수 있는 수학적 이유입니다.
+Row 20: #### (3) 스케일-물리 주파수 간 직접 선형 매핑
+Row 21: - 중심 주파수가 $f_c = 1.0\text{ Hz}$로 설정되어 있어, 웨이블릿 스케일 $a$와 실제 물리적 주파수 $f$ 사이의 관계가 역수 형태로 직결됩니다:
+Row 22: $$f = \frac{f_c}{a \cdot \Delta t} = \frac{f_s}{a}$$
+Row 23: - 샘플링 주파수 $f_s = 120\text{ Hz}$ 환경에서 목표 주파수 $15\text{ Hz} \sim 60\text{ Hz}$에 대응하는 스케일 벡터 $a$를 산출하는 과정([data_engineer.py:L170](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L170))이 수치적 보정 계수 없이 일치합니다.
+Row 24: #### (4) 안구 운동(Oculomotor) 신호와의 형상 적합성
+Row 25: - 사카드 안구 운동 중 발생하는 미세진전(Ocular Microtremor) 및 사카드 감속기 진동(Post-saccadic glissade/oscillation)은 감쇠하는 유사 정현파(Damped sinusoidal wave) 형태를 띱니다.
+Row 26: - 기저 함수의 파형이 신호의 물리적 진동 형태와 가장 높은 상호상관(Cross-correlation)을 나타내어 웨이블릿 계수 응답이 극대화됩니다.
+Row 27: ### 3. 코드베이스 구현상의 한계점 및 비타당 요소
+Row 28: Morlet 웨이블릿 차용 자체는 표준적인 기법이나, 코드베이스의 세부 설정에는 검증되지 않은 매직 넘버와 처리 누락이 존재합니다:
+Row 29: 1. **대역폭 파라미터($f_b=4.0$) 최적화 부재**:
+Row 30: - $f_b$가 커질수록 주파수 분해능은 높아지지만 시간 분해능은 저하됩니다($\sigma_t \propto \sqrt{f_b}$).
+Row 31: - $4.0$이라는 수치가 120Hz VOG 데이터에서 그리드 서치나 시간-주파수 해상도 최적화 실험을 거쳐 도출된 근거가 코드 및 문서상에 없습니다.
+Row 32: 2. **영향 원추(Cone of Influence, COI) 배제 누락**:
+Row 33: - 웨이블릿의 가우시안 꼬리(Tail)로 인해 $1.0$초 윈도우의 시작점($t=-0.2\text{s}$)과 끝점($t=0.8\text{s}$) 부근에서 제로 패딩으로 인한 경계 아티팩트(Edge effect)가 필연적으로 발생합니다.
+Row 34: - 코드베이스에서는 COI 영역을 마스킹하거나 제거하는 과정 없이 $32 \times 32$ 맵 전체를 그대로 백본 네트워크에 공급합니다.
+
+==================================================
+Sheet: z score
+==================================================
+Row  1: Z-Score 정규화(`(mag_db - mean) / (std + 1e-8)`)가 문제가 되는 기술적 이유는 **정규화가 적용되는 범위(Scope)와 그로 인한 정보 소거 현상** 때문입니다.
+Row  2: ### 1. 환자-대조군 간 '절대 진폭(Absolute Energy)' 정보 소거
+Row  3: - **수식**:
+Row  4: $$\mu = \frac{1}{N}\sum_{i,j} X_{i,j}, \quad \sigma = \sqrt{\frac{1}{N}\sum_{i,j} (X_{i,j} - \mu)^2}, \quad Z_{i,j} = \frac{X_{i,j} - \mu}{\sigma + 10^{-8}}$$
+Row  5: - **현상**:
+Row  6: - Z-Score 정규화가 전체 데이터셋 기준이 아니라, **각 $32 \times 32$ 단일 윈도우(Trial) 내부에서 개별적으로 수행**됩니다 ([data_engineer.py:L187](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L187)).
+Row  7: - 그 결과, 모든 윈도우의 스칼로그램은 물리적 진폭의 크기와 상관없이 평균 $\mu = 0$, 표준편차 $\sigma = 1$로 일괄 강제 변환됩니다.
+Row  8: - **임상적 문제점**:
+Row  9: - 정상 대조군(HC)의 미세한 주시 진동(작은 절대 진폭)과 MCI 환자의 불안정한 주시 오차(큰 절대 진폭) 간의 **스펙트럼 에너지 크기 차이가 소거**됩니다.
+Row 10: - 모델은 신호의 실제 크기를 인지하지 못하고, 오직 $32 \times 32$ 맵 내부의 상대적 기하학적 형태(패턴)만 보고 판정해야 합니다.
+Row 11: ### 2. 채널 간(Cross-Channel / Cross-Axis) 상대 비율 왜곡
+Row 12: - **현상**:
+Row 13: - `four_error` 모드는 4개 채널(`LH-TH`, `RH-TH`, `LV-TV`, `RV-TV`)을 사용합니다.
+Row 14: - 4개 채널을 묶어서 정규화하지 않고, **채널마다 각각 독립적으로 Z-Score를 계산**합니다 ([data_engineer.py:L437](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L437)).
+Row 15: - **신호처리적 문제점**:
+Row 16: - 수평(Horizontal) 태스크의 경우, 수평 오차 채널(LH, RH)은 에너지가 크고, 수직 오차 채널(LV, RV)은 에너지가 0에 가까워야 정상입니다.
+Row 17: - 그러나 4개 채널을 각각 $Z$-정규화하면, **수직 축의 미세한 센서 잡음(Noise)도 증폭되어 표준편차 1을 갖게 되고, 수평 축의 강한 운동 오차 신호도 표준편차 1로 압축**됩니다.
+Row 18: - 작성자 역시 코드 주석([data_engineer.py:L428-L430](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L428-L430))에 이를 명시하고 있습니다:
+Row 19: ```python
+Row 20: # Compute raw |CWT| magnitudes ONCE, so the cross-axis ratio is
+Row 21: # measured BEFORE per-channel z-scoring (which erases cross-channel
+Row 22: # magnitude comparisons).
+Row 23: ```
+Row 24: ### 3. 상위 15% 임계화(Percentile 85)와의 비정상적 결합
+Row 25: - **코드 구조** ([data_engineer.py:L183-L187](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L183-L187)):
+Row 26: ```python
+Row 27: threshold = np.percentile(magnitude, 85)
+Row 28: magnitude[magnitude < threshold] = 1e-3
+Row 29: mag_db = 10 * np.log10(magnitude)
+Row 30: mag_db = (mag_db - np.mean(mag_db)) / (np.std(mag_db) + 1e-8)
+Row 31: ```
+Row 32: - **수치적 왜곡**:
+Row 33: 1. $32 \times 32 = 1024$개 픽셀 중 $85\%$인 약 870개 픽셀이 강제로 상수 $10 \log_{10}(10^{-3}) = -30\text{ dB}$로 대체됩니다.
+Row 34: 2. 85%가 단일 상수인 극단적인 비정규(Non-normal) 분포 상태에서 `mean`과 `std`를 구하여 정규화합니다.
+Row 35: 3. 이로 인해 배경 영역(하위 85%)은 0이 아닌 음수 값($\frac{-30 - \mu}{\sigma}$)으로 밀려나며, 상위 15%의 피크 값들은 윈도우마다 전혀 다른 가변 스케일로 스케일링됩니다.
+
+==================================================
+Sheet: nearest interpolate
+==================================================
+Row  1: ### 1. `interpolate(..., mode='nearest')`의 사유 메모
+Row  2: - **파일 위치**: [frozen_mobilevit_backbone.py:L3-L4](file:///c:/Users/USER/MCI-VOG/src/four_error_using/models/layers/frozen_mobilevit_backbone.py#L3-L4)
+Row  3: - **작성된 독스트링(Docstring)**:
+Row  4: ```python
+Row  5: "FrozenMobileViTBackbone — frozen feature extractor (NOT trained).    Upscales the adapter output `[3, 32, 32]` to 256x256 (nearest-neighbour, to   preserve the vertical edge gradients), runs a pretrained MobileViT backbone with   all parameters frozen, and mean-pools the last hidden state to a `feature_dim`-d   vector. No gradients flow into the backbone.   "
+Row  6: ```
+Row  7: - **명시된 기술적 이유**:
+Row  8: - `(nearest-neighbour, to preserve the vertical edge gradients)`: **수직 에지 그래디언트(Vertical edge gradients)를 보존하기 위함**으로 명시되어 있습니다.
+Row  9: - [README.md:L162](file:///c:/Users/USER/MCI-VOG/README.md#L162) 및 [conv_adapter.py:L4-L5](file:///c:/Users/USER/MCI-VOG/src/four_error_using/models/layers/conv_adapter.py#L4-L5)의 설명에 따르면, 안구 운동의 급격한 시간적 과도 신호(시간 축 = 수평, 주파수 축 = 수직 에지)가 `bilinear`나 `bicubic` 같은 연속 보간을 거치면서 흐려지는(Blurring/Smoothing) 현상을 막고, 날카로운 경계선을 유지시켜 사전 학습된 MobileViT 백본이 이를 자연 영상의 에지처럼 인식하도록 의도한 설정입니다.
+Row 10: ### 2. `zoom(..., order=0)`의 사유 메모
+Row 11: - **파일 위치**: [data_engineer.py:L175-L177](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L175-L177)
+Row 12: - **작성된 주석(Comment)**:
+Row 13: ```python
+Row 14: time_zoom = self.time_bins / cwtm.shape[1]
+Row 15: # Nearest-neighbor (order=0) was the original 8-exp choice.
+Row 16: cwt_real = zoom(np.real(cwtm), (1.0, time_zoom), mode='nearest', order=0)
+Row 17: cwt_imag = zoom(np.imag(cwtm), (1.0, time_zoom), mode='nearest', order=0)
+Row 18: ```
+Row 19: - **명시된 내용**:
+Row 20: - `order=0`에 대해서는 이론적 근거 대신 **`# Nearest-neighbor (order=0) was the original 8-exp choice.`** (초기 8-task 실험에서 사용했던 기존 선택값 유지)라고만 기술되어 있습니다.
+Row 21: - 별도의 STFT 처리 코드([data_tensor_processor.py:L157](file:///c:/Users/USER/MCI-VOG/src/spectrograms_generators/short_term_fourier_transform_generators/data_tensor_processor.py#L157))에서는 `order=1`(Bilinear)을 사용했으나, CWT 파이프라인에서는 `order=0`이 승계되었습니다.
+Row 22: ### 3. 신호처리 및 신경망 관점의 기술적 팩트
+Row 23: - **해상도 확대 자체의 필요성**: MobileViT 백본(`apple/mobilevit-small`)은 입력 해상도로 $256 \times 256$을 전제하므로, $32 \times 32$ 입력을 8배 업스케일링하는 단계 자체는 백본 규격상 불가피합니다.
+Row 24: - **`nearest` 선택의 트레이드오프**:
+Row 25: - **보존되는 요소**: 신호의 고주파 에지 급변점(Slope)이 블러링으로 완화되지 않고 유지됩니다.
+Row 26: - **유발되는 부작용**: 단일 픽셀이 $8 \times 8$ 크기의 정사각형 블록으로 복제되면서, 원래 신호에 없던 인위적인 **격자형 계단 아티팩트(Checkerboard/Grid artifact)**와 고주파 공간 노이즈가 생성됩니다.
+Row 27: 보간 및 정규화, 그리고 모델 입력 파이프라인에서 발생한 문제들을 해결하기 위한 공학적 대안은 다음과 같습니다.
+Row 28: ### 1. 보간 아티팩트(Nearest 계단 현상)에 대한 대안
+Row 29: 현재 파이프라인은 $1.0\text{s}$ (120 샘플) 원본 신호를 $32 \times 32$로 축소한 뒤, 백본 입력을 맞추기 위해 다시 `nearest`로 8배($256 \times 256$) 강제 복제하고 있습니다.
+Row 30: #### 대안 A: CWT 생성 시 고해상도 직접 추출
+Row 31: - **방법**: CWT 연산 단계([data_engineer.py:L170-L178](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L170-L178))에서 처음부터 주파수 빈 수를 $F=256$으로 지정하고, 시간 축도 120 샘플에서 256 포인트로 직접 연속 시간 스케일 평가를 수행합니다.
+Row 32: - **효과**:
+Row 33: - 신호를 $32$로 깎았다가 다시 $256$으로 부풀리는 과정이 제거됩니다.
+Row 34: - $8 \times 8$ 격자 계단 아티팩트 없이 연속적인 웨이블릿 시간-주파수 맵이 보존됩니다.
+Row 35: #### 대안 B: 학습 가능한 업샘플링 (PixelShuffle 또는 ConvTranspose2d)
+Row 36: - **방법**: 고정된 수학적 보간(`nearest`, `bilinear`)을 적용하는 대신, `ConvAdapter` 내부에 서브픽셀 컨볼루션(`PixelShuffle`) 또는 전치 컨볼루션(`ConvTranspose2d`)을 배치합니다.
+Row 37: - **수식/구조**:
+Row 38: $$\mathbf{X}_{32 \times 32} \xrightarrow{\text{Conv2d}} [B, 3 \times 8^2, 32, 32] \xrightarrow{\text{PixelShuffle}(r=8)} [B, 3, 256, 256]$$
+Row 39: - **효과**:
+Row 40: - 규칙적인 체커보드 노이즈 없이, 백본이 분류에 가장 유용한 에지 및 질감 형태로 업스케일링 가중치를 역전파를 통해 스스로 학습합니다.
+Row 41: #### 대안 C: 비대칭 연속 보간 (Anisotropic Bicubic/Bilinear Interpolation)
+Row 42: - **방법**: `F.interpolate(x, size=(256, 256), mode='bicubic', align_corners=False)`를 적용합니다.
+Row 43: - **효과**:
+Row 44: - 고주파 계단 노이즈가 제거됩니다.
+Row 45: - 시간 축과 주파수 축의 물리적 성질 차이를 고려할 경우, 주파수 축(스펙트럼 연속성)에는 `bicubic`, 시간 축(과도 응답 에지)에는 1차 선형 보간을 적용하는 분리 보간(Separable interpolation)이 사용됩니다.
+Row 46: ### 2. Z-Score 정규화(절대 진폭 소거)에 대한 대안
+Row 47: 단일 윈도우·단일 채널 내부에서 $\mu=0, \sigma=1$로 강제 리셋하여 환자 간 신호 크기 차이와 채널 간 비율을 지워버리는 문제를 해결하는 방식입니다.
+Row 48: #### 대안 A: 훈련 데이터셋 전역 통계(Global/Cohort Statistics) 기반 정규화
+Row 49: - **방법**: ImageNet 표준 방식과 동일하게, 개별 윈도우가 아닌 **Train 코호트 전체**에서 채널별 평균 $\mu_c$와 표준편차 $\sigma_c$를 1회 산출하여 고정 상수로 적용합니다:
+Row 50: $$Z_{c}(t, f) = \frac{X_{c}(t, f) - \mu_c^{\text{train}}}{\sigma_c^{\text{train}} + \epsilon}$$
+Row 51: - **효과**:
+Row 52: - 정상인(작은 떨림 진폭)과 MCI 환자(큰 오차 진폭) 사이의 **절대적 스케일 차이가 윈도우 간에 그대로 유지**됩니다.
+Row 53: #### 대안 B: 4개 채널 합동 정규화 (Joint Cross-Channel Normalization)
+Row 54: - **방법**: 4개 채널을 분리하지 않고, 1개 윈도우의 4개 채널 전체 픽셀($4 \times 32 \times 32$)을 하나의 텐서로 묶어 단일 평균 $\mu_{\text{joint}}$와 표준편차 $\sigma_{\text{joint}}$를 계산합니다:
+Row 55: $$Z_{c, i, j} = \frac{X_{c, i, j} - \mu_{\text{joint}}}{\sigma_{\text{joint}} + \epsilon}$$
+Row 56: - **효과**:
+Row 57: - 주 태스크 축(예: 수평축)의 에너지가 크고 비주축(수직축)의 에너지가 작은 **채널 간 에너지 상대 비율이 보존**됩니다.
+Row 58: #### 대안 C: 고정 데시벨(dB) 범위 Min-Max 클리핑
+Row 59: - **방법**: Z-Score 대신 물리적 파워 단위에 기반한 고정 데시벨 클리핑을 적용합니다:
+Row 60: $$S_{\text{db}} = 10 \log_{10}(M + \epsilon), \quad \tilde{S} = \text{clip}\left(\frac{S_{\text{db}} - \text{dB}_{\min}}{\text{dB}_{\max} - \text{dB}_{\min}}, 0, 1\right)$$
+Row 61: - **효과**:
+Row 62: - 임의의 평균 차감 없이 물리적 크기가 $[0, 1]$ 구간으로 일관되게 정규화됩니다.
+Row 63: ### 3. 모델 아키텍처 및 입력 차원 매핑의 근본적 대안
+Row 64: - **문제의 본질**: 1D 시계열 데이터(120개 수치)를 굳이 2D 자연 영상용 백본(MobileViT, $256 \times 256 \times 3$)에 넣으려다 보니 CWT $\to$ 다운샘플링 $\to$ 8배 업스케일링 $\to$ 채널 어댑터라는 다단계 변환 아티팩트가 누적되었습니다.
+Row 65: - **공학적 대안 (1D 시계열 전용 아키텍처 채용)**:
+Row 66: - 2D 이미지 변환을 배제하고, 원본 4채널 오차 시계열 $X \in \mathbb{R}^{B \times 4 \times 120}$을 직접 입력받는 **1D 아키텍처(ConvNeXt-1D, PatchTST, TimesNet 등)**를 사용합니다.
+Row 67: - 변환으로 인한 정보 왜곡(보간 노이즈, 경계 효과, 스케일 왜곡)이 제거되며 모델 파라미터와 연산량이 축소됩니다.
+
+==================================================
+Sheet: convAdapter
+==================================================
+Row  1: ### 1. 작성자가 주석/문서에 명시해 둔 이유
+Row  2: - **코드 주석** ([task_embedding.py:L3-L5](file:///c:/Users/USER/MCI-VOG/src/four_error_using/models/layers/task_embedding.py#L3-L5)):
+Row  3: ```python
+Row  4: "   A lookup table of `num_tasks` vectors (one per task id 0..num_tasks-1). The   selected vector is concatenated onto the visual feature to condition the head   on which task produced the window.   "
+Row  5: ```
+Row  6: - **README 문서** ([README.md:L112, L213](file:///c:/Users/USER/MCI-VOG/README.md#L112,L213)):
+Row  7: - "Task embedding lets the model condition predictions per paradigm; this is what makes the multi-grouping probe informative."
+Row  8: - "Total trainable params: ~1.7 k for 2-exp, ~3 k for full-exp."
+Row  9: - **작성자의 설계 의도**:
+Row 10: - Frozen MobileViT 백본을 유지하면서 전체 학습 파라미터 수를 3천 개 수준으로 극단적으로 억제하기 위해, 분류기 직전에 32차원 벡터를 단순 연결(`torch.cat`)하는 최소 비용의 룩업 테이블 방식을 채택했습니다.
+Row 11: ### 2. 단순 결합(`torch.cat`) + `CosineLinear`의 수학적 한계
+Row 12: 현재의 결합 방식([task_conditioned_classifier.py:L61-L62](file:///c:/Users/USER/MCI-VOG/src/four_error_using/models/task_conditioned_classifier.py#L61-L62))은 수학적으로 다음과 같이 전개됩니다:
+Row 13: $$\mathbf{z} = [\mathbf{f}_{\text{visual}} \,\|\, \mathbf{e}_{\text{task}}] \in \mathbb{R}^{672} \quad (\mathbf{f} \in \mathbb{R}^{640}, \, \mathbf{e} \in \mathbb{R}^{32})$$
+Row 14: `CosineLinear`는 이를 $\ell_2$ 정규화한 뒤 클래스 가중치 벡터 $\mathbf{w}_c$와의 내적을 계산합니다:
+Row 15: $$\text{logit}_c = \tau \cdot \frac{\mathbf{w}_{c, 1:640} \cdot \mathbf{f} + \mathbf{w}_{c, 641:672} \cdot \mathbf{e}_t}{\sqrt{\|\mathbf{f}\|_2^2 + \|\mathbf{e}_t\|_2^2}}$$
+Row 16: 이 구조에서 발생하는 구체적 한계는 다음과 같습니다:
+Row 17: 1. **차원 불균형에 의한 임베딩 희석**:
+Row 18: - 640차원과 32차원의 차원 비는 20:1입니다. 분모의 $\ell_2$ 노름 계산 시 $\|\mathbf{f}\|_2^2$가 지배적이며, 32차원 태스크 임베딩 성분의 스케일 기여도는 상대적으로 작게 제한됩니다.
+Row 19: 2. **상호작용(Interaction)의 부재**:
+Row 20: - 수식에서 보듯 시각 특징 $\mathbf{f}$와 태스크 임베딩 $\mathbf{e}_t$는 곱셈이나 비선형 변환 없이 단순히 **덧셈 분해(Additive decomposition)** 형태로 로짓에 기여합니다.
+Row 21: - 즉, "이 윈도우가 Anti-saccade(과제 2, 6)일 때는 특정 시점의 오차 에너지를 다르게 해석하라"는 조건부 특징 변조가 불가능하며, 태스크별로 일정한 상수 오프셋만 클래스 결정 경계에 더해지는 형태에 그칩니다.
+Row 22: ### 3. 공학적 대안 구조
+Row 23: 단순 결합 대신 조건부 학습(Conditional Learning)에서 검증된 표준 대안들은 다음과 같습니다:
+Row 24: #### 대안 A: FiLM (Feature-wise Linear Modulation)
+Row 25: - **메커니즘**: 태스크 임베딩 $\mathbf{e}_t$로부터 640차원의 스케일 계수 $\boldsymbol{\gamma}_t$와 시프트 계수 $\boldsymbol{\beta}_t$를 선형 투영하여 시각 특징에 원소별(Element-wise)로 적용:
+Row 26: $$\tilde{\mathbf{f}} = \boldsymbol{\gamma}(\mathbf{e}_t) \odot \mathbf{f}_{\text{visual}} + \boldsymbol{\beta}(\mathbf{e}_t)$$
+Row 27: - **효과**: 태스크 종류에 따라 백본이 추출한 640개 시각 특징 중 필요한 채널을 동적으로 증폭(Gating)하거나 억제할 수 있습니다. 추가 파라미터는 $32 \times (640 \times 2) \approx 4\text{만}$ 개 수준입니다.
+Row 28: #### 대안 B: 멀티 헤드(Multi-head) 구조
+Row 29: - **메커니즘**: 공통 백본 특징 $\mathbf{f}_{\text{visual}} \in \mathbb{R}^{640}$ 뒤에 8개 태스크가 단일 분류기를 공유하지 않고, 태스크별 독립 헤드 $\text{Head}_t: \mathbb{R}^{640} \to \mathbb{R}^2$를 배치:
+Row 30: $$\hat{\mathbf{y}} = \text{Head}_{\text{task\_id}}(\mathbf{f}_{\text{visual}})$$
+Row 31: - **효과**: 태스크 임베딩 자체가 불필요하며, 태스크 간의 결정 경계 간섭(Negative transfer) 없이 과제별 최적 이진 분류기를 개별 수렴시킬 수 있습니다. 총 파라미터 증가량은 $640 \times 2 \times 8 = 10,240$개에 불과합니다.
+Row 32: #### 대안 C: 입력단 조건화 (Early Conditioning)
+Row 33: - **메커니즘**: 백본이 모두 끝난 뒤 붙이는 Late-fusion 대신, 입력단 `ConvAdapter` 단계에서 태스크 원-핫(또는 임베딩)을 $32 \times 32$ 공간으로 브로드캐스팅하여 채널 축으로 결합:
+Row 34: $$\mathbf{X}_{\text{in}} \in \mathbb{R}^{B \times (4 + 8) \times 32 \times 32} \xrightarrow{\text{ConvAdapter}} \mathbb{R}^{B \times 3 \times 32 \times 32}$$
+Row 35: - **효과**: 어댑터가 3채널로 압축할 때부터 태스크 정보를 반영하여 공간 에지 필터링을 수행합니다.
+
+==================================================
+Sheet: 윈도우0.2타당성
+==================================================
+Row  1: 현재 설정된 `pre_stimulus_sec = 0.2s` (자극 전 200ms)의 한계점과 이를 과학적·생리학적·신호처리적으로 타당하게 설정하기 위한 구체적인 대안 및 모델 입력 연계 방안은 다음과 같습니다.
+Row  2: ### 1. 현재 '0.2초' 기준의 모호성 및 문제점
+Row  3: 1. **임상적·생리학적 한계 (MCI 환자의 주시 불안정성)**:
+Row  4: - 정상인의 평균 주시 지속 시간(Fixation duration)은 약 200~300ms(Rayner, 1998)이나, 연속 사카드 과제(Saccade A/B/R)에서는 이전 목표에 대한 잔여 수정 사카드(Corrective saccade) 또는 글리세이드가 $t \in [-0.2, 0]$ 구간에 침범할 수 있습니다.
+Row  5: - MCI 환자에게 빈번한 구형파 저크(Square Wave Jerks, SWJ)나 기저 진동이 해당 200ms 구간에 포함되면, 베이스라인 평균($\mu_{\text{pre}}$) 자체가 편향되어 자극 후($+0.8\text{s}$) 오차 신호 전체가 거꾸로 오프셋 왜곡을 겪습니다.
+Row  6: 2. **신호처리적 한계 (CWT 영향 원추, Cone of Influence)**:
+Row  7: - Complex Morlet 웨이블릿($f_b=4.0, f_c=1.0$)의 $e$-folding 시간 반경은 $\tau_s = \frac{\sqrt{2} f_c}{f}$입니다(Torrence & Compo, 1998).
+Row  8: - 최저 주파수 $15\text{Hz}$에서의 경계 영향 폭은 $\tau_{15\text{Hz}} = \frac{\sqrt{2} \times 1.0}{15} \approx 94\text{ms}$이며, 양측 영향 반경은 약 $188\text{ms}$입니다.
+Row  9: - 윈도우 시작점($-0.2\text{s}$)에서 $t=0$(자극 개시점)까지의 간격이 200ms에 불과하여, $t=0$ 부근의 저주파수(15~20Hz) 스펙트럼이 윈도우 시작 경계 아티팩트(Zero-padding edge effect)의 영향권에 걸치게 됩니다.
+Row 10: 3. **통계적 한계 (소표본 분산)**:
+Row 11: - $120\text{Hz}$ 샘플링에서 0.2초는 **단 24개 샘플**입니다. 센서 노이즈가 존재하는 환경에서 24개 샘플의 산술 평균은 분산이 큽니다 ($\text{Var}(\bar{x}) = \sigma^2 / 24$).
+Row 12: ### 2. 타당한 설정 및 개선 방안
+Row 13: #### 방안 A: 속도 임계 기반 적응형 주시 구간 추출 (I-VT Fixation-Locked Baseline)
+Row 14: - **근거**: Salvucci & Goldberg (2000) 안구 운동 식별 알고리즘 (Velocity-Threshold Identification).
+Row 15: - **구체적 알고리즘**:
+Row 16: 1. $t=0$ 직전 안구의 복합 속도 $v(t) = \sqrt{v_H^2 + v_V^2}$를 역추적합니다.
+Row 17: 2. 안구 속도가 주시 안정 임계값($|v| < 30^\circ/\text{s}$) 이하로 유지된 순수 주시 구간 $[t_{\text{start}}, 0]$을 탐색합니다.
+Row 18: 3. 만약 이전 사카드가 진행 중이었다면 해당 구간을 배제하고, 순수 주시 구간의 **중앙값(Median)**을 베이스라인 오프셋으로 차감합니다:
+Row 19: $$\text{offset} = \text{median}\left(\text{eye}(t) - \text{target}(t)\right), \quad t \in [t_{\text{fix\_start}}, 0]$$
+Row 20: - **효과**: 고정 200ms 가정으로 인한 이전 사카드 침범 및 이상치 오염을 원천 차단합니다.
+Row 21: #### 방안 B: CWT COI 마진을 포함한 '패딩 후 크롭' 윈도우 (Oversampled CWT with Cropping)
+Row 22: - **근거**: Torrence & Compo (1998) 웨이블릿 경계 효과 제거 기법.
+Row 23: - **구체적 알고리즘**:
+Row 24: 1. 원본 CSV에서 윈도우를 **사전 0.4초, 사후 1.0초** (총 1.4초, 168개 샘플)로 여유 있게 추출합니다.
+Row 25: 2. 1.4초 신호 전체에 대해 CWT 연산을 수행합니다.
+Row 26: 3. $15\text{Hz}$의 COI 영향권($\approx 100\text{ms}$)을 벗어난 내부 유효 구간인 **$[-0.1\text{s}, +0.7\text{s}]$** (총 0.8초) 또는 **$[0\text{s}, +0.8\text{s}]$** 영역만 스칼로그램에서 크롭(Crop)합니다.
+Row 27: - **효과**: 자극 개시 시점($t=0$) 및 사카드 발생 구간의 스칼로그램이 경계 왜곡 없이 순수한 주파수 에너지만을 유지합니다.
+Row 28: #### 방안 C: 영평균(Zero-mean) 웨이블릿 특성을 이용한 베이스라인 감산 생략
+Row 29: - **수학적 근거**: 모체 웨이블릿은 허용성 조건(Admissibility condition)에 의해 적분값이 0입니다:
+Row 30: $$\int_{-\infty}^{\infty} \psi(t) \, dt = 0 \implies \hat{\psi}(0) = 0$$
+Row 31: - **구체적 대안**:
+Row 32: - DC 오프셋(안구의 위치 편차 상수 $C$)은 웨이블릿 변환 시 다음과 같이 소거됩니다:
+Row 33: $$\mathcal{W}[x(t) + C](a, b) = \mathcal{W}[x(t)](a, b) + C \int \psi^*\left(\frac{t-b}{a}\right) dt = \mathcal{W}[x(t)](a, b) + 0$$
+Row 34: - 따라서 $15\text{Hz}$ 이상의 대역통과 필터 역할을 하는 CWT 특성상, **0.2초 평균을 억지로 빼는 전처리 과정 자체를 생략**하고 원본 오차 신호를 직접 CWT에 투입할 수 있습니다.
+Row 35: - 베이스라인 감산으로 인한 추가적인 노이즈 유입(MCI 환자의 주시 떨림이 베이스라인 평균에 포함되어 신호가 왜곡되는 현상)을 방지합니다.
+Row 36: ### 3. 모델 투입 파이프라인과의 연계 최적화 (End-to-End Alignment)
+Row 37: 윈도우 추출부터 MobileViT 백본 투입까지의 해상도 불일치 문제를 일관되게 정합하는 파이프라인 구성입니다:
+Row 38: ```
+Row 39: [안구 오차 원본] (fs = 120Hz)
+Row 40: │
+Row 41: ▼  (1) 리샘플링: 128Hz (2의 거듭제곱 규격화)
+Row 42: [128Hz 정규 신호]
+Row 43: │
+Row 44: ▼  (2) 윈도우 분할: 사전 0.25s (32샘플) + 사후 0.75s (96샘플) = 총 1.0s (128샘플)
+Row 45: [128-point Window]
+Row 46: │
+Row 47: ▼  (3) 직접 CWT: F = 64 scales, T = 128 time-steps
+Row 48: [64 × 128 Scalogram]
+Row 49: │
+Row 50: ▼  (4) 어댑터 내 학습형 업샘플링 (PixelShuffle 4× × 2×)
+Row 51: [3 × 256 × 256 Tensor]
+Row 52: │
+Row 53: ▼  (5) 백본 투입
+Row 54: [Frozen MobileViT Backbone]
+Row 55: ```
+Row 56: - **이점**:
+Row 57: - `fs=120Hz`에서 발생하던 샘플 수 불일치(24샘플, 96샘플)가 2의 거듭제곱($32, 96 \to 128$)으로 정렬됩니다.
+Row 58: - $32 \times 32$로 깎은 뒤 `nearest`로 8배 복제하던 계단 아티팩트가 제거되고, CWT에서 바로 $64 \times 128$ 해상도를 생성한 뒤 신경망 어댑터를 통해 $256 \times 256$으로 보간됩니다.
+
+==================================================
+Sheet: magnitude85
+==================================================
+Row  1: `threshold = np.percentile(magnitude, 85)` 및 `magnitude[magnitude < threshold] = 1e-3` 처리에 대해 수식적·신호처리적·통계적 관점에서 증명해야 할 사항, 증명되지 않은 사실, 그리고 파이프라인 전체에 미치는 영향은 다음과 같습니다.
+Row  2: ### 1. 수학적·임상적으로 증명되어야 하는 전제 (가설)
+Row  3: 이 전처리가 정당성을 가지려면 다음 3가지 명제가 사전에 증명되어야 합니다.
+Row  4: 1. **에너지 기반 신호-잡음 분리 가설**:
+Row  5: - 스칼로그램 진폭 $M(t, f)$의 상위 15% 영역에만 MCI 병리적 안구 운동(사카드 이상 및 미세진전) 정보가 집중되어 있고, 하위 85%는 순수 노이즈(센서 잡음, 배경 표류)라는 점이 파워 스펙트럼 밀도(PSD) 분석을 통해 증명되어야 합니다.
+Row  6: 2. **고정 백분위수(85th Percentile) 보편성 가설**:
+Row  7: - 정상 대조군(HC)과 환자군(MCI), 그리고 과제 난이도(Reflexive vs Anti-saccade)에 관계없이 유효 병리 신호의 면적 비율이 항상 전체 시간-주파수 평면의 정확히 15%로 일정하다는 통계적 불변성이 증명되어야 합니다.
+Row  8: 3. **자연 영상 백본(MobileViT) 적합성 가설**:
+Row  9: - 연속적인 에너지 구배(Gradient)를 가진 원본 스칼로그램보다, 하위 85%를 강제로 평탄화하여 인위적 에지(Edge)를 형성한 스파스(Sparse) 스칼로그램이 ImageNet 사전 학습 가중치와 더 높은 특징 정합성을 보인다는 비교 실험(Ablation)이 증명되어야 합니다.
+Row 10: ### 2. 증명되어 있지 않은 결여된 사실
+Row 11: 현재 코드베이스와 연구 기록에서 위 가설들은 증명되어 있지 않으며, 다음 사실들이 확인됩니다.
+Row 12: 1. **수치 85%의 최적화 근거 부재**:
+Row 13: - 85%라는 수치에 대해 타 백분위수(0%, 50%, 70%, 90%, 95%)와의 성능 비교 실험(Grid search / Ablation) 기록이 없습니다.
+Row 14: - 코드 독스트링([data_engineer.py:L181](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L181))에는 성능 최적화가 아닌 **`"to shrink the cache"` (디스크 캐시 크기 압축)**가 1차 목적으로 명시되어 있습니다.
+Row 15: 2. **정보 손실률(Energy Loss) 정량화 부재**:
+Row 16: - 파세발 정리(Parseval's theorem)에 기반하여 하위 85%를 잘라냈을 때 보존되는 에너지 비율:
+Row 17: $$\text{Energy Ratio} = \frac{\sum_{M \ge p_{85}} M^2}{\sum_{\text{all}} M^2}$$
+Row 18: 이 값이 정상군과 MCI군에서 각각 몇 % 보존되는지에 대한 정량적 분석이 수행되지 않았습니다.
+Row 19: 3. **상태 의존적 신호 비율 변동 무시**:
+Row 20: - 안정 주시(Fixation) 구간에서는 상위 15% 내부에도 유의미한 병리 신호가 없을 수 있습니다(노이즈가 상위 15%로 격상).
+Row 21: - 반대로 강한 사카드 오류가 발생하는 구간에서는 상위 30~40% 영역까지 유효 신호일 수 있으나, 일괄 85% 절단으로 인해 유효 신호의 상당 부분이 `1e-3`으로 삭제됩니다.
+Row 22: ### 3. 어떤 것이 어떻게 영향을 받는가
+Row 23: 이 하드 임계화는 후속 전처리 단계와 모델 학습에 다음과 같은 물리적 왜곡을 발생시킵니다.
+Row 24: #### (1) 확률 분포의 퇴화 (Degenerate Dirac Delta Spike)
+Row 25: - **현상**:
+Row 26: - $32 \times 32 = 1024$개 픽셀 중 $85\%$인 870개 픽셀이 강제로 상수 $10^{-3}$ ($10\log_{10}(10^{-3}) = -30\text{ dB}$)으로 고정됩니다.
+Row 27: - **결과**:
+Row 28: - 연속적이어야 할 시간-주파수 확률 분포가 단일 값($-30\text{ dB}$)에 85%의 질량이 집중되는 극단적 비정규(Non-continuous) 분포로 붕괴됩니다.
+Row 29: #### (2) 후속 Z-Score 정규화 스케일 왜곡
+Row 30: - **메커니즘**:
+Row 31: $$Z = \frac{S - \mu}{\sigma + 10^{-8}}, \quad S = 10\log_{10}(M)$$
+Row 32: - **결과**:
+Row 33: - 870개 픽셀이 $-30\text{ dB}$이므로, 평균 $\mu$와 표준편차 $\sigma$는 순전히 상위 15% 피크의 진폭 크기에 종속됩니다.
+Row 34: - 상위 15%의 피크가 매우 큰 윈도우: $\sigma$가 커져서 $-30\text{ dB}$ 배경의 $Z$ 값은 $0$에 가깝게 이동합니다.
+Row 35: - 상위 15%의 피크가 작은 윈도우: $\sigma$가 작아져서 동일한 $-30\text{ dB}$ 배경의 $Z$ 값이 $-5 \sim -10$ 수준의 극단적 음수로 밀려납니다.
+Row 36: - 즉, **배경 잡음의 정규화 수치가 윈도우마다 무작위로 요동치는 불안정성**이 발생합니다.
+Row 37: #### (3) 미세진전(Ocular Microtremor, OMT) 신호의 배제
+Row 38: - **결과**:
+Row 39: - 사카드 본운동(수십 도 오차)과 안구 미세진전(0.1도 이하 진동)이 1초 윈도우 내에 공존할 때, 에너지 크기 차이로 인해 사카드 발발 순간의 고주파 스파이크가 상위 15%를 독점합니다.
+Row 40: - MCI의 지표가 될 수 있는 미세한 지속 진동 성분은 하위 85%로 분류되어 전부 `1e-3`으로 소거됩니다.
+Row 41: #### (4) 계단형 경계 아티팩트 및 과적합
+Row 42: - **결과**:
+Row 43: - 상위 15%와 하위 85% 사이에 신호 물리와 무관한 급격한 절벽형 경계선(Step discontinuity)이 생성됩니다.
+Row 44: - 이 경계선이 `nearest` 보간을 통해 $8 \times 8$ 블록으로 확장되면서, 백본 신경망이 실제 안구 운동 주파수가 아닌 **인위적인 85% 절단선 기하 형태를 학습하여 결정 경계를 형성하는 구조적 편향**을 초래합니다.
+
+==================================================
+Sheet: 임베딩차원
+==================================================
+Row  1: `task_emb_dim = 32`에 대해 코드베이스, Git 커밋 이력, 그리고 선형대수학적 관점에서 확인된 사실과 근거는 다음과 같습니다.
+Row  2: ### 1. 코드베이스 및 문서상에 기록된 근거
+Row  3: - **코드 위치**: [task_conditioned_classifier.py:L28](file:///c:/Users/USER/MCI-VOG/src/four_error_using/models/task_conditioned_classifier.py#L28), [task_embedding.py:L11](file:///c:/Users/USER/MCI-VOG/src/four_error_using/models/layers/task_embedding.py#L11)
+Row  4: - **README 비교 기록** ([README.md:L83, L91, L103](file:///c:/Users/USER/MCI-VOG/README.md#L83,L91,L103)):
+Row  5: - **2-태스크 파이프라인**: `Embedding(num_tasks=2, embedding_dim=16)`
+Row  6: - **8-태스크 파이프라인**: `Embedding(num_tasks=8, embedding_dim=32)`
+Row  7: - 문서 내 언급: `"Smaller model (16-dim task embedding vs 32) and simpler decision space (binary vs 8-way task conditioning)."`
+Row  8: - **도출 배경**:
+Row  9: - 태스크 수가 2개에서 8개로 늘어남에 따라 임베딩 차원을 16에서 32로 늘린 **2의 거듭제곱(Power of 2) 기반의 공학적 휴리스틱**입니다.
+Row 10: - 최적화(Ablation) 실험(예: 4, 8, 16, 32, 64 비교)을 거쳐 선정된 수치가 아니며, 초기 커밋(`b34cecf`)부터 기본값으로 고정되어 있습니다.
+Row 11: ### 2. 선형대수학 및 통계적 관점의 특성
+Row 12: 1. **자유도(Degrees of Freedom) 대비 과잉 차원(Over-parameterization)**:
+Row 13: - 구분해야 하는 태스크의 수는 $N = 8$개입니다.
+Row 14: - 8개의 이산 범주(Discrete categories)를 상호 직교(Orthogonal)하게 표현하는 데 필요한 최소 차원은 **8차원(One-hot vector의 크기)**이며, 선형 독립 공간의 최대 랭크(Rank)는 $8$입니다.
+Row 15: - 8개 범주를 32차원 공간($\mathbb{R}^{32}$)에 임베딩할 경우, 8개의 점이 형성하는 아핀 부분공간(Affine subspace)의 차원은 최대 7차원에 불과하며, 나머지 25차원은 잉여 자유도가 됩니다.
+Row 16: 2. **백본 특징 대비 차원 점유율**:
+Row 17: - MobileViT 백본 특징: 640차원
+Row 18: - 태스크 임베딩: 32차원
+Row 19: - 결합 차원: $640 + 32 = 672$차원
+Row 20: - 태스크 임베딩이 전체 결합 벡터에서 차지하는 비율은 $\frac{32}{672} \approx 4.76\%$입니다.
+Row 21: 3. **파라미터 수**:
+Row 22: - `nn.Embedding(8, 32)`: 256개 파라미터
+Row 23: - `CosineLinear`의 태스크 가중치 슬라이스 ($2 \times 32$): 64개 파라미터
+Row 24: - 태스크 조건화에 사용되는 총 학습 파라미터 수는 320개입니다.
+Row 25: 태스크 개수 $N=8$을 기준으로 이론적 최적 임베딩 차원($D$)을 산출하는 방식은 기준 이론에 따라 **3차원, 5차원, 7~8차원**으로 도출됩니다.
+Row 26: ### 1. 정보이론 및 실험 요인 설계(Factorial Design) 기준: 3차원 ~ 5차원
+Row 27: 본 연구의 8개 태스크는 독립적인 무작위 범주가 아니라 3개의 명확한 직교 요인으로 분해됩니다:
+Row 28: 1. **운동 축 (Axis)**: Horizontal vs Vertical ($2$가지 $\to 1\text{ bit}$)
+Row 29: 2. **운동 형태 (Paradigm)**: Saccade A vs Saccade B vs Saccade R ($3$가지 $\to \log_2 3 \approx 1.58\text{ bits}$)
+Row 30: 3. **인지 억제 제어 (Inhibition)**: Prosaccade vs Anti-saccade ($2$가지 $\to 1\text{ bit}$)
+Row 31: - **정보 엔트로피(Entropy) 기준 최솟값**:
+Row 32: $$H = \log_2(8) = 3\text{ bits} \implies D_{\min} = \mathbf{3}$$
+Row 33: 3개 축(Axis, Type, Anti 여부)의 잠재 공간(Latent space)만으로 8개 과제의 상태를 중복 없이 표현할 수 있습니다.
+Row 34: - **원-핫 분해(Disentangled Factorization) 기준**:
+Row 35: Axis($1$차원) + Type($3$차원) + Anti($1$차원) = **$5$차원**입니다.
+Row 36: ### 2. 딥러닝 실증 및 경험적 통계 법칙 기준: 4차원 ~ 5차원
+Row 37: 정형 및 범주형 임베딩 연구에서 널리 검증된 표준 산출 공식에 $N=8$을 대입한 수치입니다:
+Row 38: - **Google / TensorFlow 경험 법칙 (Fourth Root Rule)**:
+Row 39: $$D = \lfloor \sqrt[4]{N} \rfloor \quad \text{또는} \quad D = \lfloor 1.6 \times \sqrt{N} \rfloor$$
+Row 40: - $\sqrt[4]{8} \approx 1.68 \implies \mathbf{2} \sim \mathbf{3}\text{차원}$
+Row 41: - $1.6 \times \sqrt{8} \approx 1.6 \times 2.83 \approx 4.52 \implies \mathbf{4} \sim \mathbf{5}\text{차원}$
+Row 42: - **FastAI 범주형 임베딩 공식**:
+Row 43: $$D = \min\left(600, \, \text{round}\left(1.6 \times N^{0.56}\right)\right)$$
+Row 44: - $1.6 \times 8^{0.56} \approx 1.6 \times 3.204 \approx 5.12 \implies \mathbf{5}\text{차원}$
+Row 45: ### 3. 선형대수학 및 기하학적 독립성(Regular Simplex) 기준: 7차원 ~ 8차원
+Row 46: - **기하학적 조건**:
+Row 47: - 8개 태스크 간의 사전 유사도를 전혀 가정하지 않고, 모든 태스크 쌍 간의 유클리드 거리가 동일한 정단체(Regular Simplex)를 형성하려면 공간 차원은 다음과 같아야 합니다:
+Row 48: $$D = N - 1 = 8 - 1 = \mathbf{7}\text{차원}$$
+Row 49: - **정규직교 기저(Orthonormal Basis) 조건**:
+Row 50: - 각 태스크를 상호 수직(직교)인 단위 벡터로 분립시키는 데 필요한 차원은 **$8$차원**입니다.
+Row 51: ### 4. 종합 결론
+Row 52: | 기준 이론 | 산출 차원 ($D$) | 근거 및 의미 |
+Row 53: |---|---|---|
+Row 54: | **정보 엔트로피** | **3** | $\log_2(8) = 3$, Axis/Type/Anti의 3비트 최소 잠재 공간 |
+Row 55: | **요인 분해 / FastAI** | **5** | 운동 축(1) + 패러다임(3) + 억제(1)의 생성 요인 수직 분해 |
+Row 56: | **기하학적 직교성** | **7 ~ 8** | 8개 범주의 정단체(Simplex) 완전 선형 독립 차원 |
+Row 57: 따라서 8개 태스크의 조건화에 필요한 이론적 최적 차원은 **$5 \sim 8$차원** 범위이며, 현재의 `32`차원은 이보다 $4 \sim 6$배 큰 수치입니다.
+
+==================================================
+Sheet: threshold0.5
+==================================================
+Row  1: `threshold = 0.5` (`pred = prob > 0.5`) 설정이 갖는 통계학적·임상적 문제점과 수학적 근거는 다음과 같습니다.
+Row  2: ### 1. 코호트 사전 확률(Prior Probability)과의 불일치
+Row  3: - **데이터셋 구성**:
+Row  4: - 총 37명: 정상 대조군(HC) 14명, 경도인지장애(MCI) 23명
+Row  5: - 실제 MCI 클래스 사전 확률:
+Row  6: $$P(\text{MCI}) = \frac{23}{37} \approx 62.16\%, \quad P(\text{HC}) = \frac{14}{37} \approx 37.84\%$$
+Row  7: - **베이즈 결정 이론(Bayes Decision Rule)의 위배**:
+Row  8: - 오분류 비용이 동일할 때, 사후 확률 기반의 최적 베이즈 결정 규칙은 클래스 사전 확률이 $1:1$ ($50\%:50\%$)일 때만 임계값 $\theta = 0.5$가 성립합니다.
+Row  9: - 사전 확률이 $62.2\%$로 불균형한 집단에서 임계값을 0.5로 고정하면, 모델은 기본적으로 MCI일 확률이 높은 모집단 특성을 반영하지 못하고 **정상군(HC) 방향으로 과도하게 보수적인 판정**을 내리게 됩니다.
+Row 10: ### 2. 학습 손실 가중치(Class Weight)와의 충돌
+Row 11: - **학습 코드** ([model_trainer.py:L123-L126](file:///c:/Users/USER/MCI-VOG/src/four_error_using/model_trainers/model_trainer.py#L123-L126)):
+Row 12: ```python
+Row 13: alpha = torch.tensor(
+Row 14: [total / (2 * label_counts[i]) for i in range(2)], dtype=torch.float32
+Row 15: ).to(self.device)
+Row 16: criterion = nn.CrossEntropyLoss(weight=alpha)
+Row 17: ```
+Row 18: - HC 가중치: $\alpha_0 = \frac{37}{2 \times 14} \approx 1.321$
+Row 19: - MCI 가중치: $\alpha_1 = \frac{37}{2 \times 23} \approx 0.804$
+Row 20: - **수치적 왜곡**:
+Row 21: - 손실 함수에서 소수 클래스(HC)에 $1.32$배의 페널티를 주어 학습했기 때문에, 모델의 출력 로짓과 소프트맥스 확률은 이미 **가상의 1:1 균형 분포로 편향(Shift)된 확률**입니다.
+Row 22: - 이렇게 인위적으로 보정된 확률을 사후 확률 보정(Probability calibration) 없이 실제 불균형 집단 평가에서 그대로 $\theta = 0.5$로 절단하면, 민감도(Sensitivity)와 특이도(Specificity)의 수학적 평형점이 어긋납니다.
+Row 23: ### 3. 임상 스크리닝의 오진 비용 비대칭성(Cost Asymmetry) 무시
+Row 24: - **의료 진단에서의 비용 구조**:
+Row 25: - 위음성(False Negative, FN): MCI 환자를 정상으로 오진 $\to$ 조기 치료 골든타임 상실 (치명적 비용 $C_{\text{FN}}$)
+Row 26: - 위양성(False Positive, FP): 정상을 환자로 오진 $\to$ 2차 정밀 검사(MRI, PET, 신경심리검사) 비용 발생 ($C_{\text{FP}}$)
+Row 27: - **비용 최적 임계값 수식**:
+Row 28: $$\theta^* = \frac{C_{\text{FP}}}{C_{\text{FP}} + C_{\text{FN}}}$$
+Row 29: - **문제점**:
+Row 30: - 임계값 $0.5$는 $C_{\text{FN}} = C_{\text{FP}}$, 즉 **"환자를 놓치는 비용과 정상인에게 추가 검사를 의뢰하는 비용이 완전히 같다"**는 비의학적 가정을 전제합니다.
+Row 31: - 일반적으로 스크리닝 도구는 $C_{\text{FN}} > C_{\text{FP}}$이므로 $\theta^* < 0.5$ (예: $0.3 \sim 0.4$)로 설정하여 민감도를 우선 확보하는 것이 표준입니다.
+Row 32: ### 4. 다수 윈도우 평균(Soft-Voting) 확률의 분산 수축 현상
+Row 33: - **집계 공식** ([repetitive_validator.py:L119-L126](file:///c:/Users/USER/MCI-VOG/src/four_error_using/evaluators/repetitive_validator.py#L119-L126)):
+Row 34: $$\bar{P}_s = \frac{\sum_{i=1}^K w_{t_i} P_i}{\sum_{i=1}^K w_{t_i}}$$
+Row 35: - **통계적 특성**:
+Row 36: - 한 피험자당 수십 개의 윈도우 확률($P_i$)을 평균하면, 중심극한정리에 의해 분산이 $\frac{1}{K}$로 수축(Shrinkage)되어 피험자 확률 $\bar{P}_s$는 $0.5$ 주변으로 밀집합니다.
+Row 37: - 캘리브레이션되지 않은 $0.5$ 고정 기준선은 $0.49$와 $0.51$처럼 사소한 잡음에 의해 환자 진단 결과가 반전되는 결정 경계 불안정성을 유발합니다.
+Row 38: ### 5. 타당한 대안 설정 기법
+Row 39: 1. **Youden's J Index 기반 ROC 최적화**:
+Row 40: $$J(\theta) = \text{Sensitivity}(\theta) + \text{Specificity}(\theta) - 1$$
+Row 41: - 훈련/검증 분할(Inner fold)의 ROC 곡선상에서 $J$를 최대화하는 임계값 $\theta^*$를 동적으로 산출하여 테스트 세트에 적용.
+Row 42: 2. **목표 민감도(Target Sensitivity) 고정 임계값**:
+Row 43: - 스크리닝 목적에 맞춰 "민감도 $\ge 85\%$"를 보장하는 가장 높은 임계값을 검증 세트에서 탐색하여 설정.
+
+==================================================
+Sheet: threshold_err
+==================================================
+Row  1: 코드베이스의 `task_l_err > thr or task_r_err > thr` 조건에 대해 코드에 명시된 배경, 구조적 결함, 그리고 안구운동학(VOG) 분야의 표준 방법론은 다음과 같습니다.
+Row  2: ### 1. 코드베이스에 구현된 방식과 명시된 사유
+Row  3: - **코드 위치**: [data_engineer.py:L419-L426](file:///c:/Users/USER/MCI-VOG/src/four_error_using/data_processor/data_engineer.py#L419-L426)
+Row  4: ```python
+Row  5: # Artifact rejection on the task-axis L/R errors only (parity rule)
+Row  6: if axis_char == 'h':
+Row  7: task_l_err, task_r_err = err_LH, err_RH
+Row  8: else:
+Row  9: task_l_err, task_r_err = err_LV, err_RV
+Row 10: if (np.max(np.abs(task_l_err)) > self.artifact_threshold
+Row 11: or np.max(np.abs(task_r_err)) > self.artifact_threshold):
+Row 12: continue
+Row 13: ```
+Row 14: - **명시된 사유 (`parity rule`)**:
+Row 15: - 기존의 단일 축 2-태스크 파이프라인(`two_experiments_using`)에서 사용하던 필터링 규칙과 동일한 조건을 유지(Parity)하기 위해 도입된 규칙입니다.
+Row 16: - 임계값은 기본 `artifact_threshold = 30.0` (또는 CLI 인자 `45.0`)도로 설정되어 있습니다.
+Row 17: ### 2. 현행 방식의 구조적 모순 및 한계
+Row 18: 1. **비주축(Cross-axis) 오차 방치 (입력과 필터의 불일치)**:
+Row 19: - `four_error` 모드는 4개 채널(`LH, RH, LV, RV`)을 전부 모델 입력으로 투입합니다.
+Row 20: - 그러나 수평 태스크(`axis_char == 'h'`)일 때는 오직 수평 오차(`err_LH, err_RH`)만 $30^\circ$ 초과 여부를 검사하고, **수직 오차(`err_LV, err_RV`)가 $100^\circ$ 이상 발산하더라도 검사하지 않고 통과**시킵니다.
+Row 21: - 수직 태스크에서도 수평 축의 이상치는 검사 대상에서 제외됩니다.
+Row 22: 2. **동공 소실(Blink/Occlusion) 메타데이터 미활용**:
+Row 23: - VOG 신호에서 $30^\circ$ 이상의 오차가 발생하는 주원인은 눈 깜빡임(Blink) 또는 속눈썹에 의한 동공 가림(Pupil occlusion)입니다.
+Row 24: - VOG 시스템의 기본 출력인 동공 면적(Pupil Area)이나 신뢰도(Confidence Score)를 활용하지 않고, 단순 각도 좌표의 최댓값만으로 판단합니다.
+Row 25: 3. **OR 조건에 의한 과잉 기각(Over-rejection)**:
+Row 26: - 한쪽 눈(예: 좌안)에만 일시적인 반사광 잡음이 발생하여 $30^\circ$를 초과하고 우안은 정상 궤적을 유지하는 경우에도, `or` 조건에 의해 해당 1초 윈도우 전체가 폐기됩니다.
+Row 27: ### 3. VOG 및 안구운동학 분야의 표준 아티팩트 제거 방법론
+Row 28: 안구 운동 연구(Holmqvist et al., 2011; Engbert & Kliegl, 2003)에서 검증된 표준 기법들은 다음과 같습니다.
+Row 29: #### (1) 2D 유클리드 공간 경계 필터 (Display Boundary Rejection)
+Row 30: - **수식**:
+Row 31: $$r(t) = \sqrt{\left(\text{eye}_H(t)\right)^2 + \left(\text{eye}_V(t)\right)^2} > \theta_{\text{screen}}$$
+Row 32: - **원리**: 특정 단일 축만 검사하는 대신, 안구 시선 좌표가 실제 모니터 자극 제시 화면(예: $\pm 20^\circ \sim \pm 25^\circ$)을 벗어나는 모든 시점을 물리적 불가능 구간으로 판정하여 양 축을 동시에 필터링합니다.
+Row 33: #### (2) 생리학적 속도·가속도 한계 필터 (Kinematic Plausibility Filter)
+Row 34: - **수식**:
+Row 35: $$|v(t)| > v_{\max} \quad (v_{\max} \approx 800^\circ/\text{s} \sim 1000^\circ/\text{s})$$
+Row 36: $$|a(t)| > a_{\max} \quad (a_{\max} \approx 50{,}000^\circ/\text{s}^2)$$
+Row 37: - **원리**: 인체 안구 근육의 물리적 최대 각속도와 각가속도를 초과하는 궤적(센서 튐, 트래킹 유실)을 미분값을 통해 감지하여 제거합니다.
+Row 38: #### (3) 동공 면적 기반 블링크 구간 마스킹 및 보간 (Pupil-Area Spline Interpolation)
+Row 39: - **방법**:
+Row 40: 1. 동공 면적이 급감하거나 0이 되는 구간 $[t_{\text{blink\_start}} - 50\text{ms}, \, t_{\text{blink\_end}} + 50\text{ms}]$을 검출합니다.
+Row 41: 2. 윈도우 전체를 버리지 않고, 해당 블링크 구간만 NaN으로 마스킹하거나 3차 스플라인(Cubic spline)으로 보간(Interpolation)하여 윈도우의 나머지 유효 주시/사카드 신호를 보존합니다.
+Row 42: #### (4) 양안 공액 운동 일치성 검사 (Binocular Disparity Check)
+Row 43: - **수식**:
+Row 44: $$|\text{eye}_L(t) - \text{eye}_R(t)| > \theta_{\text{vergence\_threshold}} \quad (\text{예: } 10^\circ)$$
+Row 45: - **원리**: 사카드 운동 시 양안은 동일한 방향으로 움직이는 켤레(Conjugate) 특성을 갖습니다. 양안의 시선 차이가 임계치를 초과하여 벌어지면 단안 카메라 트래킹 오류로 식별합니다.

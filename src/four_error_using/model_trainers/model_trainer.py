@@ -44,7 +44,19 @@ def _get_labels(dataset) -> torch.Tensor:
     """Extract label tensor from Dataset, Subset, or AugmentedSubset."""
     if hasattr(dataset, "y"):
         return dataset.y
-    return dataset.dataset.y[dataset.indices]
+    if hasattr(dataset, "dataset") and hasattr(dataset, "indices"):
+        base_ds = dataset.dataset
+        if hasattr(base_ds, "y"):
+            return base_ds.y[dataset.indices]
+        if hasattr(base_ds, "dataset") and hasattr(base_ds, "indices"):
+            return _get_labels(base_ds)[dataset.indices]
+    if hasattr(dataset, "targets"):
+        return torch.as_tensor(dataset.targets, dtype=torch.long)
+    try:
+        labels = [dataset[i][2] for i in range(len(dataset))]
+        return torch.as_tensor(labels, dtype=torch.long)
+    except Exception:
+        raise AttributeError(f"Cannot extract labels from dataset of type {type(dataset)}")
 
 
 class ModelTrainer:
@@ -60,6 +72,7 @@ class ModelTrainer:
         device="auto",
         checkpoint_dir: Optional[Path] = None,
         fold_idx: Optional[int] = None,
+        task_weighter: Optional[nn.Module] = None,
     ):
         if device == "auto":
             if torch.cuda.is_available():
@@ -72,10 +85,13 @@ class ModelTrainer:
             self.device = torch.device(device)
 
         self.model = model.to(self.device)
+        self.task_weighter = task_weighter.to(self.device) if task_weighter is not None else None
         self.use_amp = self.device.type == "cuda"
         self.scaler = torch.amp.GradScaler('cuda') if self.use_amp else None
 
         trainable = [p for p in self.model.parameters() if p.requires_grad]
+        if self.task_weighter is not None:
+            trainable.extend([p for p in self.task_weighter.parameters() if p.requires_grad])
         self.optimizer = optim.AdamW(trainable, lr=1e-3, weight_decay=1e-4)
 
         self.checkpoint_dir = Path(checkpoint_dir) if checkpoint_dir is not None else None
@@ -135,8 +151,19 @@ class ModelTrainer:
 
         best_auroc = -1.0
         best_epoch = 0
+        best_weights = None
+        best_weighter_weights = None
         no_improve = 0
         ckpt_path = self._checkpoint_path()
+        weighter_ckpt_path = (
+            ckpt_path.parent / f"{ckpt_path.stem}_task_weighter.pth"
+            if ckpt_path is not None
+            else None
+        )
+        if ckpt_path is not None and ckpt_path.exists():
+            ckpt_path.unlink()
+        if weighter_ckpt_path is not None and weighter_ckpt_path.exists():
+            weighter_ckpt_path.unlink()
 
         for epoch in range(max_epochs):
             # Linear warm-up (epochs 0 … WARMUP_EPOCHS-1)
@@ -147,8 +174,16 @@ class ModelTrainer:
 
             # Train
             self.model.train()
+            if self.task_weighter is not None:
+                self.task_weighter.train()
             t_loss = t_correct = t_total = 0
-            for inputs, tasks, labels in train_loader:
+            for batch in train_loader:
+                if len(batch) >= 4:
+                    inputs, tasks, labels, sids = batch[0], batch[1], batch[2], batch[3]
+                else:
+                    inputs, tasks, labels = batch[0], batch[1], batch[2]
+                    sids = None
+
                 inputs = inputs.to(self.device, non_blocking=True)
                 tasks = tasks.to(self.device, non_blocking=True)
                 labels = labels.to(self.device, non_blocking=True)
@@ -156,23 +191,31 @@ class ModelTrainer:
                 self.optimizer.zero_grad()
                 with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp):
                     out = self.model(inputs, tasks)
-                    loss = criterion(out, labels)
+                    win_loss = criterion(out, labels)
+                    if self.task_weighter is not None and sids is not None:
+                        loss, _ = self.task_weighter(
+                            win_logits=out,
+                            tasks=tasks,
+                            labels=labels,
+                            sids=sids,
+                            win_loss=win_loss,
+                        )
+                    else:
+                        loss = win_loss
+
+                clip_params = [p for p in self.model.parameters() if p.requires_grad]
+                if self.task_weighter is not None:
+                    clip_params.extend([p for p in self.task_weighter.parameters() if p.requires_grad])
 
                 if self.use_amp:
                     self.scaler.scale(loss).backward()
                     self.scaler.unscale_(self.optimizer)
-                    nn.utils.clip_grad_norm_(
-                        [p for p in self.model.parameters() if p.requires_grad],
-                        max_norm=self.GRAD_CLIP,
-                    )
+                    nn.utils.clip_grad_norm_(clip_params, max_norm=self.GRAD_CLIP)
                     self.scaler.step(self.optimizer)
                     self.scaler.update()
                 else:
                     loss.backward()
-                    nn.utils.clip_grad_norm_(
-                        [p for p in self.model.parameters() if p.requires_grad],
-                        max_norm=self.GRAD_CLIP,
-                    )
+                    nn.utils.clip_grad_norm_(clip_params, max_norm=self.GRAD_CLIP)
                     self.optimizer.step()
 
                 t_loss += loss.item() * inputs.size(0)
@@ -182,12 +225,20 @@ class ModelTrainer:
 
             # Validate
             self.model.eval()
+            if self.task_weighter is not None:
+                self.task_weighter.eval()
             v_loss = v_correct = v_total = 0
             all_probs: list = []
             all_lbls: list = []
 
             with torch.no_grad():
-                for inputs, tasks, labels in val_loader:
+                for batch in val_loader:
+                    if len(batch) >= 4:
+                        inputs, tasks, labels, sids = batch[0], batch[1], batch[2], batch[3]
+                    else:
+                        inputs, tasks, labels = batch[0], batch[1], batch[2]
+                        sids = None
+
                     inputs_d = inputs.to(self.device, non_blocking=True)
                     tasks_d = tasks.to(self.device, non_blocking=True)
                     labels_d = labels.to(self.device, non_blocking=True)
@@ -223,9 +274,14 @@ class ModelTrainer:
             if v_auroc > best_auroc:
                 best_auroc = v_auroc
                 best_epoch = epoch + 1
+                best_weights = {k: v.cpu().clone() for k, v in self.model.state_dict().items()}
+                if self.task_weighter is not None:
+                    best_weighter_weights = {k: v.cpu().clone() for k, v in self.task_weighter.state_dict().items()}
                 no_improve = 0
                 if ckpt_path is not None:
                     torch.save(self.model.state_dict(), ckpt_path)
+                    if self.task_weighter is not None and weighter_ckpt_path is not None:
+                        torch.save(self.task_weighter.state_dict(), weighter_ckpt_path)
                     logger.info("  ↳ new best AUROC; saved checkpoint: %s", ckpt_path)
             else:
                 no_improve += 1
@@ -240,4 +296,24 @@ class ModelTrainer:
             "Done. Best AUROC: %.4f (epoch %d) → %s",
             best_auroc, best_epoch, ckpt_path if ckpt_path else "in-memory only",
         )
+        if best_epoch > 0:
+            if ckpt_path is not None and ckpt_path.exists():
+                try:
+                    state_dict = torch.load(ckpt_path, map_location=self.device, weights_only=True)
+                except Exception:
+                    state_dict = torch.load(ckpt_path, map_location=self.device)
+                self.model.load_state_dict(state_dict)
+                logger.info("Restored model weights from best checkpoint at epoch %d", best_epoch)
+                if self.task_weighter is not None and weighter_ckpt_path is not None and weighter_ckpt_path.exists():
+                    try:
+                        w_state = torch.load(weighter_ckpt_path, map_location=self.device, weights_only=True)
+                    except Exception:
+                        w_state = torch.load(weighter_ckpt_path, map_location=self.device)
+                    self.task_weighter.load_state_dict(w_state)
+                    logger.info("Restored task weighter weights from checkpoint at epoch %d", best_epoch)
+            elif best_weights is not None:
+                self.model.load_state_dict(best_weights)
+                if self.task_weighter is not None and best_weighter_weights is not None:
+                    self.task_weighter.load_state_dict(best_weighter_weights)
+                logger.info("Restored model weights from best epoch %d (in-memory)", best_epoch)
         return self.model
